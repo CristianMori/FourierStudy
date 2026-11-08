@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Epicycles</title>
+<meta name="description" content="Interactive demo: turn an image into one closed line, split it into x(t) and y(t), take the Fourier series of each and draw the image with two chains of rotating circles.">
+<link rel="stylesheet" href="epicycles.css">
+</head>
+<body>
+<header class="site-header">
+  <h1>Epicycles</h1>
+  <nav id="pages"><a href="index.html">Sampling &amp; aliasing</a> · <a href="filter.html">Spectrum × Filter</a> · <strong>Epicycles</strong></nav>
+</header>
+
+<main>
+  <section class="intro">
+    <p>
+      Any closed curve is two periodic signals: its x position and its y position, one lap apart in time.
+      Each signal is a Fourier series, a sum of rotating circles, so two chains of circles can draw the curve:
+      one chain above the picture sets the pen's x, one beside it sets the pen's y.
+      This page walks an image through every step. Each panel shows the result of the step before it.
+    </p>
+  </section>
+
+  <section class="panel" id="panel-input">
+    <h2><span class="swatch sw-1"></span><span>1 · Image</span></h2>
+    <p class="step">
+      Load a picture (PNG or JPG) or use the built-in sample. It is shrunk to at most 512 px and read as brightness.
+      Nothing is uploaded: the file is read by your browser only.
+    </p>
+    <div class="toolbar">
+      <label class="drop" id="drop" tabindex="0">
+        <input type="file" id="file" accept="image/png,image/jpeg,image/*">
+        <span>Choose an image or drop one here</span>
+      </label>
+      <button id="btn-sample">Built-in sample</button>
+      <span class="hint" id="src-name"></span>
+    </div>
+  </section>
+
+  <section class="panel" id="panel-vec">
+    <h2><span class="swatch sw-1"></span><span>2 · Vectorize into strokes</span></h2>
+    <p class="step">
+      The image is blurred, then lines are found either as <b>edges</b> (Canny: Sobel gradient, thinning of the ridge,
+      hysteresis threshold), good for photos and shapes, or as <b>dark lines</b> (pixels darker than the threshold),
+      good for pen drawings and text. Either way the result is thinned to one pixel wide (Zhang–Suen), traced into
+      polylines between endpoints and junctions, and simplified (Ramer–Douglas–Peucker). Short strokes are dropped.
+    </p>
+    <div class="toolbar controls">
+      <span class="group-label">Find</span>
+      <span class="segmented" id="mode">
+        <button data-mode="edges" aria-pressed="false">edges</button>
+        <button data-mode="lines" aria-pressed="true">dark lines</button>
+      </span>
+      <label class="slider">blur σ <input type="range" id="p-blur" min="0.5" max="3" step="0.1" value="1.2"><output id="o-blur"></output></label>
+      <label class="slider">threshold <input type="range" id="p-thr" min="2" max="95" step="1" value="50"><output id="o-thr"></output></label>
+      <label class="slider">min stroke <input type="range" id="p-min" min="0" max="80" step="1" value="10"><output id="o-min"></output></label>
+      <label class="slider">tolerance <input type="range" id="p-tol" min="0.3" max="4" step="0.1" value="1"><output id="o-tol"></output></label>
+    </div>
+    <div class="views three">
+      <div><div class="plot-label">Image</div><canvas class="view" id="cv-src"></canvas></div>
+      <div><div class="plot-label">Thinned detector output</div><canvas class="view" id="cv-edge"></canvas></div>
+      <div><div class="plot-label">Traced polylines</div><canvas class="view" id="cv-poly"></canvas></div>
+    </div>
+    <p class="note" id="st-vec"></p>
+  </section>
+
+  <section class="panel" id="panel-conn">
+    <h2><span class="swatch sw-2"></span><span>3 · Connect into one closed path</span></h2>
+    <p class="step">
+      A pen cannot lift, so the strokes are chained with <i>bridges</i>. They are ordered (nearest neighbour first, then
+      2-opt and Or-opt swaps) and each is entered from whichever end is closer, so the bridges stay short.
+      Strokes are coloured by order along the path; the bridges are the dashed lines.
+      The last stroke is joined back to the first.
+    </p>
+    <div class="toolbar controls">
+      <label class="check"><input type="checkbox" id="c-bridges" checked> show bridges</label>
+    </div>
+    <canvas class="view wide" id="cv-path"></canvas>
+    <p class="note" id="st-conn"></p>
+  </section>
+
+  <section class="panel" id="panel-sig">
+    <h2><span class="swatch sw-3"></span><span>4 · Two signals, x(t) and y(t)</span></h2>
+    <p class="step">
+      The closed path is resampled at equal steps of arc length into N points, so t runs over one lap, the period T.
+      Reading off the x and y coordinates gives two ordinary signals. The faint dashed curve is what is left of each
+      signal when only the circles chosen in step 6 are kept.
+    </p>
+    <div class="toolbar controls">
+      <label class="slider">N samples <input type="range" id="p-n" min="8" max="12" step="1" value="10"><output id="o-n"></output></label>
+    </div>
+    <div class="views two">
+      <div><div class="plot-label">x(t), pixels <span class="legend"><i class="ln ln-x"></i>x <i class="ln ln-ap"></i>approximation</span></div>
+        <div class="tplot"><canvas class="view sig" id="sig-x"></canvas><i class="cursor" id="cur-x"></i></div></div>
+      <div><div class="plot-label">y(t), pixels <span class="legend"><i class="ln ln-y"></i>y <i class="ln ln-ap"></i>approximation</span></div>
+        <div class="tplot"><canvas class="view sig" id="sig-y"></canvas><i class="cursor" id="cur-y"></i></div></div>
+    </div>
+    <p class="note" id="st-sig"></p>
+  </section>
+
+  <section class="panel" id="panel-fft">
+    <h2><span class="swatch sw-4"></span><span>5 · Fourier series of each signal</span></h2>
+    <p class="step">
+      Each signal gets its own FFT, as a real signal, so x(t) = x₀ + Σ A<sub>k</sub> cos(2π k t/T + φ<sub>k</sub>) for k = 1 … N/2
+      and the same for y(t). A<sub>k</sub> = 2|X<sub>k</sub>|/N is the radius of one circle and φ<sub>k</sub> = arg X<sub>k</sub>
+      is its starting angle; k is how many turns it makes per lap. The frequency and amplitude axes are logarithmic.
+      The lit stems are the circles kept; grey ones are dropped.
+    </p>
+    <div class="views two">
+      <div class="spec-col">
+        <div class="plot-label">X: amplitude A<sub>k</sub> (pixels)</div><canvas class="view spec" id="sp-xa"></canvas>
+        <div class="plot-label">X: phase φ<sub>k</sub> (°)</div><canvas class="view specp" id="sp-xp"></canvas>
+      </div>
+      <div class="spec-col">
+        <div class="plot-label">Y: amplitude A<sub>k</sub> (pixels)</div><canvas class="view spec" id="sp-ya"></canvas>
+        <div class="plot-label">Y: phase φ<sub>k</sub> (°)</div><canvas class="view specp" id="sp-yp"></canvas>
+      </div>
+    </div>
+    <p class="note" id="st-fft"></p>
+  </section>
+
+  <section class="panel" id="panel-stage">
+    <h2><span class="swatch sw-5"></span><span>6 · Circles on circles draw the image</span></h2>
+    <p class="step">
+      Above the picture, the <b>X chain</b>: each circle is centred on the tip of the one before, largest first.
+      Only the horizontal position of its tip matters, and that is the pen's x. Left of the picture, the <b>Y chain</b>
+      is the same for y, turned a quarter turn so its tip's height is the pen's y. The two chains never share a
+      circle; the dashed lines show each tip dropping onto the pen. Where a chain's circles leave its strip they are cut off.
+    </p>
+    <div class="toolbar controls">
+      <button id="b-play" aria-pressed="true">Pause</button>
+      <button id="b-reset">Reset trail</button>
+      <label class="slider x">X circles <input type="range" id="p-mx" min="0" max="1000" step="1" value="1000"><output id="o-mx"></output></label>
+      <span class="presets" id="mp-x"><button data-m="1">1</button><button data-m="5">5</button><button data-m="20">20</button><button data-m="100">100</button><button data-m="all">all</button></span>
+      <label class="slider y">Y circles <input type="range" id="p-my" min="0" max="1000" step="1" value="1000"><output id="o-my"></output></label>
+      <span class="presets" id="mp-y"><button data-m="1">1</button><button data-m="5">5</button><button data-m="20">20</button><button data-m="100">100</button><button data-m="all">all</button></span>
+      <label class="check"><input type="checkbox" id="c-link"> link X and Y</label>
+      <label class="slider">speed <input type="range" id="p-speed" min="-100" max="100" step="1" value="0"><output id="o-speed"></output></label>
+    </div>
+    <div class="toolbar controls">
+      <label class="check"><input type="checkbox" id="c-circles" checked> show circles</label>
+      <label class="check"><input type="checkbox" id="c-ghost" checked> show target path</label>
+      <label class="check"><input type="checkbox" id="c-penup"> hide bridges (pen up)</label>
+    </div>
+    <div class="stage-wrap"><canvas id="stage"></canvas></div>
+    <p class="note" id="st-stage"></p>
+    <p class="note">
+      Keeping fewer circles throws away the smallest ones, which carry the sharp corners and fine detail, so the drawing
+      gets smoother and rounder: the same band-limiting as the anti-alias filter on the
+      <a href="index.html">sampling page</a> and the low-pass presets on the <a href="filter.html">filter page</a>.
+    </p>
+  </section>
+
+  <section class="panel" id="panel-cam">
+    <h2><span class="swatch sw-6"></span><span>7 · Cam mechanism</span></h2>
+    <p class="step">
+      A cam turns rotation into a prescribed back-and-forth motion: a follower pressed against its edge slides in and out as the
+      cam turns. Here each axis gets one cam on a shaft that turns once per lap, with the outline r(θ) = R<sub>base</sub> + x(θ) − min x,
+      so one cam stores the whole Fourier series of its axis. The X follower drives a vertical bar sideways, the Y follower drives a
+      horizontal bar up and down, and the pen sits where the bars cross. The circle chains and the cams make the same motion and the
+      same drawing, from the same circle counts. The cams are drawn smaller than the picture, so a lever (dashed) magnifies
+      each follower's travel.
+    </p>
+    <div class="toolbar controls">
+      <button id="b-play2" aria-pressed="true">Pause</button>
+      <button id="b-reset2">Reset trail</button>
+      <span class="group-label">Follower</span>
+      <span class="segmented" id="follower">
+        <button data-f="knife" aria-pressed="true">knife-edge</button>
+        <button data-f="roller" aria-pressed="false">roller</button>
+      </span>
+      <label class="slider">roller radius <input type="range" id="p-rho" min="1" max="60" step="1" value="10"><output id="o-rho">10 px</output></label>
+    </div>
+    <canvas id="cam"></canvas>
+    <p class="note" id="st-cam"></p>
+    <p class="note">
+      With many circles the cam becomes very wiggly: the sharp corners of the drawing become sharp features on the cam, and a roller
+      cannot follow them (red). That is why real harmonic machines, such as Kelvin's tide predictor, use one simple cam or crank per
+      harmonic and add the motions with a cord or linkage. (A one-cam-per-harmonic view is not shown here.) Circle counts, speed and
+      play/pause are shared with step 6.
+    </p>
+  </section>
+</main>
+
+<script src="epicycles.js"></script>
+</body>
+</html>

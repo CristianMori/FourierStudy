@@ -5,7 +5,8 @@ formulas say. Each page shows a signal in time and its amplitude and phase spect
 updates live as you move a slider or draw.
 
 Plain HTML, CSS and JavaScript on a canvas: no build step, no libraries, no network access. The spectra are
-computed analytically from Fourier series, not estimated with a windowed FFT, so what you see is exact.
+computed analytically from Fourier series, not estimated with a windowed FFT, so what you see is exact (the
+Epicycles page, whose signal comes from an image, uses an exact FFT of the resampled path).
 
 ## Contents
 
@@ -13,6 +14,7 @@ computed analytically from Fourier series, not estimated with a windowed FFT, so
 - [Pages](#pages)
   - [Sampling & aliasing](#sampling--aliasing) (`index.html`)
   - [Spectrum × Filter](#spectrum--filter) (`filter.html`)
+  - [Epicycles](#epicycles) (`epicycles.html`)
 - [Project layout](#project-layout)
 - [Conventions](#conventions)
 - [Author](#author)
@@ -25,8 +27,8 @@ From this folder:
 python -m http.server 8000 --bind 127.0.0.1
 ```
 
-Then open <http://127.0.0.1:8000/>. Any static web server works, and so does opening `index.html` or
-`filter.html` straight from disk. The pages link to each other from the bar at the top.
+Then open <http://127.0.0.1:8000/>. Any static web server works (the repo is also served by GitHub Pages at
+<https://cristianmori.github.io/FourierStudy/>), and so does opening the HTML files straight from disk. The pages link to each other from the bar at the top.
 
 After an update, reload with Ctrl+F5 so the browser does not keep an old copy of the scripts.
 
@@ -106,12 +108,44 @@ For example the T/8 delay preset (all gains 1, θ_k = −2πk/8) gives
 h(x) = 1 + 2·Σ_{k=1}^{64} cos(2πk(x − T/8)/T) = sin((2K+1)π(x − T/8)/T) / sin(π(x − T/8)/T),
 a band-limited spike at T/8, so y(x) is f(x − T/8) for any f made of harmonics up to 64.
 
+### Epicycles
+
+`epicycles.html` — load an image (file picker, drag and drop, or the built-in sample) and watch it become a
+single line drawn by two chains of rotating circles, and then by two cams.
+
+- **Vectorize:** blur, then Canny edges or a dark-line threshold, Zhang–Suen thinning, tracing into polylines,
+  Ramer–Douglas–Peucker simplification. Controls: mode, blur, threshold, min stroke length, tolerance.
+- **Connect:** strokes are ordered by nearest neighbour, then improved with 2-opt and Or-opt, each entered from
+  its closer end and joined into one closed path. The bridges are shown dashed and can be hidden in the final
+  drawing (pen up).
+- **Signals:** the path is resampled by arc length to N = 256…4096 points (default 1024), giving x(t) and y(t).
+- **Fourier:** a radix-2 FFT of x and of y separately; amplitude and phase stems for each. Harmonic k is a circle
+  of radius 2|X_k|/N turning k times per lap.
+- **Epicycles:** the X chain above the picture sets the pen's x, the Y chain beside it sets the pen's y.
+  **X circles** and **Y circles** are two independent log sliders (1…N/2, largest circles first, presets
+  1/5/20/100/all, optional "link X and Y"). Fewer X circles make the drawing coarse horizontally while Y stays
+  exact; the unused harmonics are dimmed in each spectrum. Also: speed, pause, reset trail, show circles.
+- **Cam mechanism:** the last section swaps the circles for one cam per axis, with the same circle counts. The cam
+  outline is r(θ) = R_base + x(θ) − min x, so a follower sliding on it moves exactly like the X (or Y) series; the
+  two followers drive a cross-slide whose crossing is the pen. A knife-edge follower is exact; a roller follower
+  (radius slider) rides the inward offset of the outline. The page shows the maximum pressure angle
+  (tan φ = r′/r) and marks undercut in red (convex pitch curve with radius of curvature below the roller radius).
+  With many harmonics the cam is very wiggly and cannot be made for a roller; real harmonic machines (Kelvin's
+  tide predictor) use one simple cam or crank per harmonic instead. That one-cam-per-harmonic view is not
+  implemented.
+
+Unlike the other two pages this one uses a numeric FFT, because the signal comes from an image; with all circles
+the pen reproduces the path to about 1e-12 px. Images are read with `createImageBitmap`/`FileReader`, so it works
+from disk. Photos with a lot of texture give many strokes and a busy path; line drawings, logos and text work
+best, or raise the threshold or min stroke length.
+
 ## Project layout
 
 | File | What it is |
 |------|------------|
 | `index.html`, `app.js`, `style.css` | Sampling & aliasing page |
 | `filter.html`, `filter.js`, `filter.css` | Spectrum × Filter page |
+| `epicycles.html`, `epicycles.js`, `epicycles.css` | Epicycles page (image → circles → cams) |
 | `README.md` | This file |
 
 Each page is self-contained: its own HTML, script and stylesheet, sharing only the link bar at the top.
