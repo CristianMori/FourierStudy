@@ -132,10 +132,11 @@
     <div class="toolbar controls">
       <button id="b-play" aria-pressed="true">Pause</button>
       <button id="b-reset">Reset trail</button>
-      <label class="slider">circles per chain <input type="range" id="p-m" min="0" max="1000" step="1" value="1000"><output id="o-m"></output></label>
-      <span class="presets" id="m-presets">
-        <button data-m="1">1</button><button data-m="5">5</button><button data-m="20">20</button><button data-m="100">100</button><button data-m="all">all</button>
-      </span>
+      <label class="slider x">X circles <input type="range" id="p-mx" min="0" max="1000" step="1" value="1000"><output id="o-mx"></output></label>
+      <span class="presets" id="mp-x"><button data-m="1">1</button><button data-m="5">5</button><button data-m="20">20</button><button data-m="100">100</button><button data-m="all">all</button></span>
+      <label class="slider y">Y circles <input type="range" id="p-my" min="0" max="1000" step="1" value="1000"><output id="o-my"></output></label>
+      <span class="presets" id="mp-y"><button data-m="1">1</button><button data-m="5">5</button><button data-m="20">20</button><button data-m="100">100</button><button data-m="all">all</button></span>
+      <label class="check"><input type="checkbox" id="c-link"> link X and Y</label>
       <label class="slider">speed <input type="range" id="p-speed" min="-100" max="100" step="1" value="0"><output id="o-speed"></output></label>
     </div>
     <div class="toolbar controls">

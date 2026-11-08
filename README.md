@@ -76,6 +76,6 @@ Load an image (file picker, drag and drop, or the built-in sample) and watch it 
 - **Connect:** strokes are ordered by nearest neighbour, then improved with 2-opt and Or-opt, each entered from its closer end and joined into one closed path. The bridges are shown dashed and can be hidden in the final drawing (pen up).
 - **Signals:** the path is resampled by arc length to N = 256…4096 points (default 1024), giving x(t) and y(t).
 - **Fourier:** a radix-2 FFT of x and of y separately; amplitude and phase stems for each. Harmonic k is a circle of radius 2|X_k|/N turning k times per lap.
-- **Epicycles:** the X chain above the picture sets the pen's x, the Y chain beside it sets the pen's y. Controls: circles per chain (log slider, largest first), speed, pause, reset trail, show circles.
+- **Epicycles:** the X chain above the picture sets the pen's x, the Y chain beside it sets the pen's y. Controls: **X circles** and **Y circles** (two independent log sliders, 1…N/2, largest circles first, with 1/5/20/100/all presets and an optional "link X and Y" checkbox), speed, pause, reset trail, show circles. Fewer X circles make the drawing coarse horizontally while Y stays exact; the unused harmonics are dimmed in each spectrum.
 
 Files are read with `createImageBitmap`/`FileReader`, so it works from disk. Photos with a lot of texture give many strokes and a busy path; use a higher threshold or min stroke length.

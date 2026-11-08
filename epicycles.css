@@ -187,3 +187,5 @@ button[aria-pressed="true"] { border-color: var(--c-pen); box-shadow: inset 0 0 
   .view.specp { height: 80px; }
   .slider input { width: 110px; }
 }
+
+#o-mx, #o-my { min-width: 8ch; }

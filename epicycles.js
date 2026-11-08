@@ -15,7 +15,7 @@ const S = {
   mode: 'lines',
   blurCache: null,
   skeleton: null, strokes: [], path: null, sig: null, ax: null, ay: null,
-  N: 1024, mFrac: 1, M: 1,
+  N: 1024, fx: 1, fy: 1, Mx: 1, My: 1,
   t: 0, playing: true, speed: 1,
   prev: null, fps: 0, frameMs: 0, drawMs: 0,
   dirty: 0, theme: null, layout: null, stats: {},
@@ -47,12 +47,16 @@ function fmt(v, d) { return v.toFixed(d); }
 function setSource(img, iw, ih, name) {
   const sc = MAX_SIDE / Math.max(iw, ih);
   const w = Math.max(8, Math.round(iw * sc)), h = Math.max(8, Math.round(ih * sc));
-  const c = document.createElement('canvas');
-  c.width = w; c.height = h;
-  const g = c.getContext('2d', { willReadFrequently: true });
-  g.fillStyle = '#fff'; g.fillRect(0, 0, w, h);      // transparent PNGs sit on white
-  g.drawImage(img, 0, 0, w, h);
-  const d = g.getImageData(0, 0, w, h).data;
+  let c, d;
+  for (let attempt = 0; attempt < 6; attempt++) {
+    c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    const g = c.getContext('2d', { willReadFrequently: true });
+    g.fillStyle = '#fff'; g.fillRect(0, 0, w, h);      // transparent PNGs sit on white
+    g.drawImage(img, 0, 0, w, h);
+    d = g.getImageData(0, 0, w, h).data;
+    if (d[3] === 255 && d[4 * (w * h - 1) + 3] === 255) break;   // a failed readback comes back all zero: draw again
+  }
   const gray = new Float32Array(w * h);
   for (let i = 0; i < w * h; i++) gray[i] = 0.299 * d[4 * i] + 0.587 * d[4 * i + 1] + 0.114 * d[4 * i + 2];
   S.work = c; S.w = w; S.h = h; S.gray = gray; S.name = name; S.blurCache = null;
@@ -480,10 +484,12 @@ function runSignals() {
 function updateM() {
   if (!S.ax) return;
   const H = S.ax.H;
-  S.M = Math.max(1, Math.min(H, Math.round(Math.exp(S.mFrac * Math.log(H)))));
-  $('o-m').textContent = S.M + ' / ' + H;
-  S.partX = partialSignal(S.ax, S.M);
-  S.partY = partialSignal(S.ay, S.M);
+  const cnt = f => Math.max(1, Math.min(H, Math.round(Math.exp(f * Math.log(H)))));
+  S.Mx = cnt(S.fx); S.My = cnt(S.fy);
+  $('o-mx').textContent = S.Mx + ' / ' + H;
+  $('o-my').textContent = S.My + ' / ' + H;
+  S.partX = partialSignal(S.ax, S.Mx);
+  S.partY = partialSignal(S.ay, S.My);
   resetTrail();
   drawSignals(); drawSpectra();
 }
@@ -619,7 +625,7 @@ function drawSignals() {
   $('st-sig').textContent = S.N + ' samples, closed path length ' + fmt(S.sig.L, 0) + ' px, one sample every ' + fmt(S.sig.L / S.N, 2) + ' px of path.';
 }
 
-function specPlots(a, ida, idp, colour) {
+function specPlots(a, ida, idp, colour, M) {
   const th = S.theme;
   const H = a.H, lh = Math.log(H) || 1;
   const L = 44, R = 8, T = 8;
@@ -643,7 +649,7 @@ function specPlots(a, ida, idp, colour) {
       g.strokeStyle = used ? colour : th.axis; g.globalAlpha = used ? 1 : 0.5; g.lineWidth = 1.2;
       g.beginPath();
       for (let k = 1; k <= H; k++) {
-        if ((a.rank[k] < S.M) !== used) continue;
+        if ((a.rank[k] < M) !== used) continue;
         const x = px(k); g.moveTo(x, y0); g.lineTo(x, py(a.amp[k]));
       }
       g.stroke();
@@ -662,7 +668,7 @@ function specPlots(a, ida, idp, colour) {
       g.strokeStyle = used ? colour : th.axis; g.globalAlpha = used ? 1 : 0.5; g.lineWidth = 1.2;
       g.beginPath();
       for (let k = 1; k <= H; k++) {
-        if ((a.rank[k] < S.M) !== used || a.amp[k] < cut) continue;
+        if ((a.rank[k] < M) !== used || a.amp[k] < cut) continue;
         const x = px(k); g.moveTo(x, py(0)); g.lineTo(x, py(a.ph[k]));
       }
       g.stroke();
@@ -676,8 +682,8 @@ function drawSpectra() {
     for (const id of ['sp-xa', 'sp-xp', 'sp-ya', 'sp-yp']) { const { g, w, h } = prep($(id)); emptyMsg(g, w, h, 'no spectrum'); }
     $('st-fft').textContent = ''; return;
   }
-  specPlots(S.ax, 'sp-xa', 'sp-xp', S.theme.x);
-  specPlots(S.ay, 'sp-ya', 'sp-yp', S.theme.y);
+  specPlots(S.ax, 'sp-xa', 'sp-xp', S.theme.x, S.Mx);
+  specPlots(S.ay, 'sp-ya', 'sp-yp', S.theme.y, S.My);
   $('st-fft').textContent = 'Iterative radix-2 FFT, O(N log N): both transforms of N = ' + S.N + ' took ' + fmt(S.stats.fftRepMs, 2) +
     ' ms. Mean position (DC): x₀ = ' + fmt(S.ax.x0, 1) + ' px, y₀ = ' + fmt(S.ay.x0, 1) + ' px. Phase is shown only for circles above 0.1% of the largest. ' +
     'With all ' + S.ax.H + ' circles the pen is within ' + fmt(S.stats.maxErr, 6) + ' px of the resampled path.';
@@ -711,7 +717,7 @@ function resetTrail() {
 }
 
 // pen position in the picture, from the two independent chains
-function penAt(t, M) { return [chainTip(S.ax, t, M), chainTip(S.ay, t, M)]; }
+function penAt(t, Mx, My) { return [chainTip(S.ax, t, Mx), chainTip(S.ay, t, My === undefined ? Mx : My)]; }
 
 function stepTrail(lay, pen, t) {
   const g = S.trail.getContext('2d');
@@ -754,16 +760,16 @@ function drawStage() {
   }
   g.drawImage(S.trail, 0, 0, lay.W, lay.H);
 
-  const M = S.M, a = S.ax, b = S.ay;
-  const need = 2 * (M + 1);
+  const a = S.ax, b = S.ay, Mx = S.Mx, My = S.My;
+  const need = 2 * (Math.max(Mx, My) + 1);
   if (posX.length < need) { posX.length = need; posY.length = need; }
-  const px = chainTip(a, S.t, M, posX), py = chainTip(b, S.t, M, posY);
+  const px = chainTip(a, S.t, Mx, posX), py = chainTip(b, S.t, My, posY);
   // screen mapping: X chain plane (A, B) -> (M0 + A s, M0/2 + B s);  Y chain rotated a quarter turn -> (M0/2 - B s, M0 + A s)
   const X = (A, B) => [M0 + A * s, M0 / 2 + B * s];
   const Y = (A, B) => [M0 / 2 - B * s, M0 + A * s];
   const pen = [M0 + px * s, M0 + py * s];
 
-  const chain = (pos, map, clip, colour) => {
+  const chain = (pos, M, map, clip, colour) => {
     g.save();
     g.beginPath(); g.rect(clip[0], clip[1], clip[2], clip[3]); g.clip();
     if ($('c-circles').checked) {
@@ -781,11 +787,11 @@ function drawStage() {
     }
     g.restore();
   };
-  chain(posX, X, [M0, 0, W - M0, M0], th.x);
-  chain(posY, Y, [0, M0, M0, dh], th.y);
+  chain(posX, Mx, X, [M0, 0, W - M0, M0], th.x);
+  chain(posY, My, Y, [0, M0, M0, dh], th.y);
 
   // tips and lines from each tip to the pen
-  const tx = X(px, posX[2 * M + 1]), ty = Y(py, posY[2 * M + 1]);
+  const tx = X(px, posX[2 * Mx + 1]), ty = Y(py, posY[2 * My + 1]);
   g.save(); g.setLineDash([4, 3]); g.lineWidth = 1;
   g.strokeStyle = th.x; g.beginPath(); g.moveTo(tx[0], tx[1]); g.lineTo(pen[0], pen[1]); g.stroke();
   g.strokeStyle = th.y; g.beginPath(); g.moveTo(ty[0], ty[1]); g.lineTo(pen[0], pen[1]); g.stroke();
@@ -819,7 +825,7 @@ function frame(now) {
     for (let i = 1; i <= sub; i++) {
       let t = S.t + dT / sub; if (t >= 1) t -= 1; if (t < 0) t += 1;
       S.t = t;
-      stepTrail(S.layout, penAt(t, S.M), t);
+      stepTrail(S.layout, penAt(t, S.Mx, S.My), t);
     }
   }
   if (S.playing || drawQueued) drawStage();
@@ -827,7 +833,7 @@ function frame(now) {
   frames++;
   if (now - fpsT > 1000) {
     S.fps = frames * 1000 / (now - fpsT); S.drawMs = drawAcc / frames; frames = 0; drawAcc = 0; fpsT = now;
-    $('st-stage').textContent = 'N = ' + S.N + ', ' + S.M + ' circles per chain (' + 2 * S.M + ' in all), lap = ' + fmt(BASE_PERIOD / S.speed, 1) + ' s. ' +
+    $('st-stage').textContent = 'N = ' + S.N + ', X chain ' + S.Mx + ' circles, Y chain ' + S.My + ' circles (' + (S.Mx + S.My) + ' in all), lap = ' + fmt(BASE_PERIOD / S.speed, 1) + ' s. ' +
       fmt(S.fps, 0) + ' fps, ' + fmt(S.drawMs, 2) + ' ms of work per frame.';
   }
 }
@@ -931,13 +937,24 @@ function init() {
     if (S.playing) { last = performance.now(); }
   });
   $('b-reset').addEventListener('click', resetTrail);
-  $('p-m').addEventListener('input', () => { S.mFrac = +$('p-m').value / 1000; updateM(); });
-  $('m-presets').addEventListener('click', e => {
-    const v = e.target.dataset && e.target.dataset.m;
-    if (!v || !S.ax) return;
-    const m = v === 'all' ? S.ax.H : Math.min(+v, S.ax.H);
-    S.mFrac = Math.log(m) / Math.log(S.ax.H); $('p-m').value = Math.round(S.mFrac * 1000); updateM();
-  });
+  // X and Y circle counts are independent; "link" makes a change to one move the other
+  const setFrac = (axis, f) => {
+    f = Math.max(0, Math.min(1, f));
+    const ids = axis === 'x' ? ['fx', 'p-mx'] : ['fy', 'p-my'];
+    S[ids[0]] = f; $(ids[1]).value = Math.round(f * 1000);
+  };
+  for (const axis of ['x', 'y']) {
+    const other = axis === 'x' ? 'y' : 'x';
+    const apply = f => { setFrac(axis, f); if ($('c-link').checked) setFrac(other, f); updateM(); };
+    $('p-m' + axis).addEventListener('input', () => apply(+$('p-m' + axis).value / 1000));
+    $('mp-' + axis).addEventListener('click', e => {
+      const v = e.target.dataset && e.target.dataset.m;
+      if (!v || !S.ax) return;
+      const m = v === 'all' ? S.ax.H : Math.min(+v, S.ax.H);
+      apply(Math.log(m) / Math.log(S.ax.H));
+    });
+  }
+  $('c-link').addEventListener('change', () => { if ($('c-link').checked) { setFrac('y', S.fx); updateM(); } });
   $('p-speed').addEventListener('input', showOutputs);
   for (const id of ['c-circles', 'c-ghost', 'c-penup']) $(id).addEventListener('change', () => { if (id === 'c-penup') resetTrail(); requestDraw(); });
   $('c-penup').addEventListener('change', () => { drawStage(); });
