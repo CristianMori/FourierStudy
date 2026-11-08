@@ -24,6 +24,10 @@ A single-page interactive demo of sampling, the Nyquist frequency and aliasing, 
   2.5·fs, with fs/2 (the Nyquist frequency), fs and 2·fs marked.
 - **Sampled:** the samples, the ideal reconstruction from them (band-limited to fs/2), and the spectrum of what
   the samples contain over 0…fs/2. Every harmonic above fs/2 folds back to an alias frequency in that band.
+- **Reconstruction switch:** Ideal (sinc, band-limited to fs/2, the default), Linear (straight lines between the
+  samples) or Zero-order hold (a staircase, like a simple DAC). Linear and ZOH leave images of the spectrum around
+  fs, 2·fs, … and bend the band down, so the error stays even with the anti-alias filter on; their spectrum axis
+  always runs to 2.5·fs.
 - **Show difference from original in red:** the error between reconstruction and original in the time plot,
   and in the spectra the aliases, the changed components and (with "wide axis") the harmonics lost above fs/2.
 - **Anti-alias filter:** removes the harmonics at or above a cutoff (default fs/2) before sampling. The
@@ -40,7 +44,11 @@ Analytically, from the Fourier series. A harmonic at f with phase φ, sampled at
 same samples as a component at f − m·fs (m = round(f/fs)) with phase φ + 2π·m·offset; a negative result is
 mirrored and its phase sign flipped. Components on the same frequency are added as complex phasors; at DC and at
 exactly fs/2 only the part the samples can see is kept. The reconstruction is the sum of these components, which
-equals ideal sinc interpolation of the samples. The harmonic sum runs to 40·fs (at least 200, at most 8000 odd
+equals ideal sinc interpolation of the samples. Linear interpolation is the sample train convolved with a triangle
+2·Ts wide, centred on the samples: each baseband phasor P at f gives lines P·e^{−i2πm·offset} at f + m·fs and
+conj(P)·e^{−i2πm·offset} at m·fs − f, each times sinc²(ν/fs) (sinc x = sin πx/πx). A zero-order hold uses a
+rectangle Ts wide instead: sinc(ν/fs)·e^{−iπν/fs}. The time plot draws these reconstructions straight from the
+samples. The harmonic sum runs to 40·fs (at least 200, at most 8000 odd
 harmonics). Ranges: f0 1–200 Hz, fs 10 Hz–5 kHz.
 
 ## Spectrum × Filter

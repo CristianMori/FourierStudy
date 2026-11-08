@@ -98,17 +98,26 @@
 
     <section class="card panel" aria-labelledby="hSamp">
       <h2 id="hSamp"><span class="step">2</span> Sampled at <i>fs</i></h2>
+      <div class="recon" role="radiogroup" aria-labelledby="reconLbl">
+        <span class="recon-lbl" id="reconLbl">Reconstruction:</span>
+        <span class="seg">
+          <label><input type="radio" name="recon" value="ideal" checked><span>Ideal (sinc, band-limited to fs/2)</span></label>
+          <label><input type="radio" name="recon" value="linear"><span>Linear (lines between samples)</span></label>
+          <label><input type="radio" name="recon" value="zoh"><span>Zero-order hold (staircase)</span></label>
+        </span>
+      </div>
+      <p class="note recon-note" id="reconNote"></p>
       <figure class="plot">
         <figcaption><b>Samples and reconstruction</b> <span class="axis-note" id="stUnit"></span>
-          <span class="legend"><i class="sw ghost"></i>original <i class="dot sample"></i>samples <i class="sw recon"></i>ideal reconstruction (band-limited to fs/2) <span class="diff-only"><i class="sw err block"></i>difference</span></span>
+          <span class="legend"><i class="sw ghost"></i>original <i class="dot sample"></i>samples <i class="sw recon"></i><span id="stLegendRecon">ideal reconstruction (band-limited to fs/2)</span> <span class="diff-only"><i class="sw err block"></i>difference</span></span>
         </figcaption>
         <canvas id="cvST" class="tall"></canvas>
       </figure>
       <p class="metric" id="metric"></p>
       <figure class="plot">
-        <figcaption><b>Amplitude</b> of what the samples contain vs frequency (Hz)
+        <figcaption><b>Amplitude</b> <span id="saWhat">of what the samples contain</span> vs frequency (Hz)
           <label class="toggle small"><input type="checkbox" id="wide"> wide axis (to 2.5·fs)</label>
-          <span class="legend"><i class="sw recon"></i>same as original <span class="diff-only"><i class="sw err"></i>differs (alias / changed) <i class="ring orig"></i>original value <span class="wide-only"><i class="sw err dashed faint"></i>lost (above fs/2)</span></span></span>
+          <span class="legend"><i class="sw recon"></i>same as original <span class="diff-only"><i class="sw err"></i>differs (alias / image / changed) <i class="ring orig"></i>original value <span class="wide-only"><i class="sw err dashed faint"></i>lost (above fs/2)</span></span></span>
         </figcaption>
         <canvas id="cvSA" class="mid"></canvas>
       </figure>
@@ -134,13 +143,18 @@
       The ringing comes from cutting off the harmonics, not from sampling.</p>
     <p>So the honest summary is: a perfect square wave cannot be sampled without aliasing, because it is not
       band-limited. That is not an exception to Nyquist; it is Nyquist.</p>
+    <p>"Exactly" needs the ideal reconstruction, too. Switch it to linear interpolation or a zero-order hold and the
+      error stays even with the filter on: those reconstructions leave copies of the spectrum around fs, 2·fs, … and
+      bend the band down a little. That is why a real converter has a reconstruction filter after it.</p>
     <p class="fine">How it is computed: the square wave is sign(sin 2πf0t) = Σ (4/πn)·cos(2πnf0t − 90°) over odd n.
       A harmonic at f = n·f0 with phase φ, sampled at t<sub>k</sub> = (k + offset)/fs, gives the same samples as a
       component at f − m·fs with phase φ + 2π·m·offset, where m = round(f/fs). If that frequency is negative it is
       mirrored to positive and its phase changes sign. Components landing on the same frequency are added as complex
       phasors; at exactly fs/2 only the part the samples can see survives. The reconstruction is the sum of these
       baseband components, which is the same as ideal sinc interpolation of the samples. The sum uses odd harmonics up
-      to 40·fs (at least 200, at most 8000 of them).</p>
+      to 40·fs (at least 200, at most 8000 of them). Linear interpolation is the sample train convolved with a
+      triangle 2·Ts wide; its spectrum is every baseband component plus its images at m·fs ± f, each multiplied by
+      sinc²(f/fs). A zero-order hold uses a rectangle Ts wide instead: sinc(f/fs) and a half-sample delay.</p>
   </section>
 </main>
 
