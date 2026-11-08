@@ -1,6 +1,6 @@
 # FourierDemo
 
-Two interactive pages about spectra, sampling and filtering. Plain HTML, CSS and JavaScript: no build step, no dependencies.
+Three interactive pages about spectra, sampling, filtering and Fourier series. Plain HTML, CSS and JavaScript: no build step, no dependencies.
 
 ## Run it
 
@@ -14,6 +14,7 @@ Run it from this folder, then open <http://127.0.0.1:8000/>. Opening `index.html
 
 - [Sampling & aliasing](#sampling--aliasing) — `index.html`
 - [Spectrum × Filter](#spectrum--filter) — `filter.html`
+- [Epicycles](#epicycles) — `epicycles.html`
 
 ## Sampling & aliasing
 
@@ -66,3 +67,15 @@ Draw a spectrum and a filter, and see their product.
 - **Result:** Y_k = X_k · H_k (amplitudes multiply, phases add), as spectra and as the waveform y(t), with x(t)
   drawn faintly for comparison. The filter's impulse response h(t) is shown too: multiplying spectra is the same
   as circular convolution in time.
+
+## Epicycles
+
+Load an image (file picker, drag and drop, or the built-in sample) and watch it become two chains of rotating circles. `epicycles.html`, `epicycles.js`, `epicycles.css`.
+
+- **Vectorize:** blur, then Canny edges or a dark-line threshold, Zhang–Suen thinning, tracing into polylines, Ramer–Douglas–Peucker simplification. Controls: mode, blur, threshold, min stroke length, tolerance.
+- **Connect:** strokes are ordered by nearest neighbour, then improved with 2-opt and Or-opt, each entered from its closer end and joined into one closed path. The bridges are shown dashed and can be hidden in the final drawing (pen up).
+- **Signals:** the path is resampled by arc length to N = 256…4096 points (default 1024), giving x(t) and y(t).
+- **Fourier:** a radix-2 FFT of x and of y separately; amplitude and phase stems for each. Harmonic k is a circle of radius 2|X_k|/N turning k times per lap.
+- **Epicycles:** the X chain above the picture sets the pen's x, the Y chain beside it sets the pen's y. Controls: circles per chain (log slider, largest first), speed, pause, reset trail, show circles.
+
+Files are read with `createImageBitmap`/`FileReader`, so it works from disk. Photos with a lot of texture give many strokes and a busy path; use a higher threshold or min stroke length.
