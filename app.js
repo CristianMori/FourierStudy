@@ -12,7 +12,8 @@
 
   const $ = (id) => document.getElementById(id);
 
-  const state = { f0: 60, fs: 1000, delta: 0.13, filter: false, cutFrac: 1, diff: true, wide: false };
+  const state = { f0: 60, fs: 1000, delta: 0.13, filter: false, cutFrac: 1, diff: true, wide: false, method: 'ideal' };
+  const METHODS = ['ideal', 'linear', 'zoh'];
 
   // ---------------------------------------------------------------- numerics
 
@@ -40,6 +41,75 @@
         zi = zr * wi + zi * wr;
         zr = nr;
       }
+    }
+    return out;
+  }
+
+  // Spectrum of the reconstruction kernel, relative to the sample instants, as [re, im].
+  // linear: triangle of width 2·Ts → sinc²(f/fs); zoh: rectangle [0, Ts) → sinc(f/fs)·e^{−iπ f/fs}.
+  function kernel(method, f, fs) {
+    const x = f / fs;
+    const sc = x === 0 ? 1 : Math.sin(Math.PI * x) / (Math.PI * x);
+    if (method === 'linear') return [sc * sc, 0];
+    return [sc * Math.cos(Math.PI * x), -sc * Math.sin(Math.PI * x)];
+  }
+
+  // Line spectrum of (sample train ⊛ kernel) up to fMax. A baseband phasor P at f has the same samples
+  // as P·e^{−i2πmδ} at f + m·fs and conj(P)·e^{−i2πmδ} at m·fs − f; each is weighted by the kernel there.
+  // The original's components are merged in so every line can be compared with what was really there.
+  function imageLines(R, fMax) {
+    const { s, bins, kept, nyq, tol } = R;
+    const fs = s.fs;
+    const items = [];
+    const add = (b, m, mir, f) => {
+      const pr = b.re, pi = mir ? -b.im : b.im;
+      const a = -TAU * m * s.delta, ca = Math.cos(a), sa = Math.sin(a);
+      const qr = pr * ca - pi * sa, qi = pr * sa + pi * ca;
+      const [wr, wi] = kernel(s.method, f, fs);
+      items.push({ f, b, m, mir, w: Math.hypot(wr, wi), re: qr * wr - qi * wi, im: qr * wi + qi * wr });
+    };
+    for (const b of bins) {
+      if (b.re === 0 && b.im === 0) continue;
+      for (let m = 0; b.f + m * fs <= fMax; m++) add(b, m, false, b.f + m * fs);
+      for (let m = 1; m * fs - b.f <= fMax; m++) add(b, m, true, m * fs - b.f);
+    }
+    for (const h of kept) if (h.f <= fMax) items.push({ f: h.f, h });
+    items.sort((a, c) => a.f - c.f);
+    const lines = [];
+    for (const it of items) {
+      let l = lines[lines.length - 1];
+      if (!l || it.f - l.f > tol) {
+        l = { f: it.f, re: 0, im: 0, ore: 0, oim: 0, contrib: [] };
+        lines.push(l);
+      }
+      if (it.h) {
+        l.ore += it.h.A * Math.cos(it.h.phi);
+        l.oim += it.h.A * Math.sin(it.h.phi);
+      } else {
+        l.re += it.re;
+        l.im += it.im;
+        l.contrib.push(it);
+      }
+    }
+    for (const l of lines) {
+      l.amp = Math.hypot(l.re, l.im);
+      l.ph = Math.atan2(l.im, l.re);
+      l.oamp = Math.hypot(l.ore, l.oim);
+      l.oph = Math.atan2(l.oim, l.ore);
+      l.isDiff = Math.hypot(l.re - l.ore, l.im - l.oim) > DIFF_EPS;
+      l.image = l.f > nyq + tol;
+      l.contrib.sort((a, c) => Math.hypot(c.re, c.im) - Math.hypot(a.re, a.im));
+    }
+    return lines.filter((l) => l.amp > 1e-12 || l.oamp > 0);
+  }
+
+  // Linear interpolation or zero-order hold of xs (xs[i] is sample k = i − 1) on t = j·dt.
+  function holdRecon(xs, method, fs, delta, dt, N) {
+    const out = new Float64Array(N);
+    for (let j = 0; j < N; j++) {
+      const u = j * dt * fs - delta;
+      const k = Math.floor(u + 1e-9), i = clamp(k + 1, 0, xs.length - 2);  // a sample instant takes the new sample
+      out[j] = method === 'zoh' ? xs[i] : xs[i] + (u - k) * (xs[i + 1] - xs[i]);
     }
     return out;
   }
@@ -117,8 +187,21 @@
     const T = Math.max(3 / f0, 12 / fs);
     const N = Math.min(8000, Math.max(2400, Math.ceil(T * fs * 8)));
     const dt = T / (N - 1);
-    const recon = evalSum(bins, 0, dt, N);
     const inputComps = kept.map((h) => ({ f: h.f, re: h.A * Math.cos(h.phi), im: h.A * Math.sin(h.phi) }));
+
+    // Samples k = −1 … K, so that a hold or a line covers the whole plot.
+    const K = Math.max(0, Math.floor(T * fs - delta) + 1);
+    const t0s = delta / fs;
+    let xs;
+    if (s.filter) {
+      xs = evalSum(inputComps, t0s - 1 / fs, 1 / fs, K + 2);
+    } else {
+      xs = new Float64Array(K + 2);
+      for (let i = 0; i < K + 2; i++) xs[i] = square((i - 1 + delta) / fs, f0);
+    }
+    const sampleVals = xs.subarray(1, K + 1);
+
+    const recon = s.method === 'ideal' ? evalSum(bins, 0, dt, N) : holdRecon(xs, s.method, fs, delta, dt, N);
     let input;
     if (s.filter) {
       input = evalSum(inputComps, 0, dt, N);
@@ -135,16 +218,6 @@
     const rmsErr = Math.sqrt(se / N);
     const rmsIn = Math.sqrt(si / N);
 
-    const K = Math.max(0, Math.floor(T * fs - delta) + 1);
-    const t0s = delta / fs;
-    let sampleVals;
-    if (s.filter) {
-      sampleVals = evalSum(inputComps, t0s, 1 / fs, K);
-    } else {
-      sampleVals = new Float64Array(K);
-      for (let k = 0; k < K; k++) sampleVals[k] = square((k + delta) / fs, f0);
-    }
-
     // Bookkeeping for the status line.
     let pBelow = 0, nBelow = 0, nAt = 0, nAboveView = 0, pKept = 0;
     for (const h of harm) {
@@ -155,13 +228,15 @@
     }
     const highestKept = kept.length ? kept[kept.length - 1].f : 0;
 
-    return {
+    const R = {
       s, nyq, fView, tol, fc, H, harm, kept, bins,
       T, N, dt, recon, input, rmsErr, rmsIn,
-      K, t0s, sampleVals,
+      K, t0s, xs, sampleVals,
       aliasedPowerFrac: s.filter ? 0 : Math.max(0, 1 - pBelow),
       nBelow, nAt, nAboveView, pKept, highestKept,
     };
+    R.lines = s.method === 'ideal' ? null : imageLines(R, fView * 1.0001);
+    return R;
   }
 
   // ---------------------------------------------------------------- formatting
@@ -292,6 +367,22 @@
     ctx.lineTo(F.X(T), F.Y(v));
     ctx.stroke();
     ctx.setLineDash([]);
+  }
+
+  // Linear or zero-order-hold reconstruction drawn exactly, sample by sample (corners on the sample instants).
+  function drawHold(F, R, method, color, width) {
+    const ctx = F.ctx, fs = R.s.fs, xs = R.xs;
+    const tk = (i) => (i - 1 + R.s.delta) / fs;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = width;
+    ctx.beginPath();
+    ctx.moveTo(F.X(tk(0)), F.Y(xs[0]));
+    for (let i = 1; i < xs.length; i++) {
+      if (method === 'zoh') ctx.lineTo(F.X(tk(i)), F.Y(xs[i - 1]));
+      ctx.lineTo(F.X(tk(i)), F.Y(xs[i]));
+    }
+    if (method === 'zoh') ctx.lineTo(F.X(tk(xs.length)), F.Y(xs[xs.length - 1]));
+    ctx.stroke();
   }
 
   // Nyquist / fs markers on a spectrum plot.
@@ -455,18 +546,20 @@
           ctx.fillRect(x - 0.6, y - 0.6, 1.2, 1.2);
         }
       }
-      polyline(F, 0, R.dt, R.recon, C.recon, 1.8);
+      if (s.method === 'ideal') polyline(F, 0, R.dt, R.recon, C.recon, 1.8);
+      else drawHold(F, R, s.method, C.recon, 1.8);
       ctx.restore();
     }
 
     // Sampled: spectrum.
     {
-      const x1 = s.wide ? R.fView : R.nyq;
-      const shown = R.bins.filter((b) => b.f <= x1 * 1.0001);
+      const ideal = s.method === 'ideal';
+      const x1 = (s.wide || !ideal) ? R.fView : R.nyq;
+      const shown = ideal ? R.bins.filter((b) => b.f <= x1 * 1.0001) : R.lines;
       let maxAmp = 0;
       for (const b of shown) maxAmp = Math.max(maxAmp, b.amp);
       const yMax = Math.max(1.4, maxAmp * 1.1);
-      const lost = (s.wide && s.diff) ? R.kept.filter((h) => !h.inBand && h.f <= R.fView) : [];
+      const lost = (ideal && s.wide && s.diff) ? R.kept.filter((h) => !h.inBand && h.f <= R.fView) : [];
       const dot = shown.length + lost.length <= 120;
       const FA = frame(cv.SA, ampOpts(x1, yMax));
       const FP = frame(cv.SP, phaseOpts(x1));
@@ -493,7 +586,7 @@
           ring(FA, b.f, b.oamp, C.orig);
           ring(FP, b.f, deg(b.oph), C.orig);
         }
-        const html = binHtml(b, R);
+        const html = ideal ? binHtml(b, R) : lineHtml(b, R);
         ta.push({ x: a.x, y: a.y, amp: b.amp, html });
         if (p) tp.push({ x: p.x, y: p.y, amp: b.amp, html });
       }
@@ -522,6 +615,48 @@
     if (b.contrib.length > list.length) html += `<br><span class="m">… and ${b.contrib.length - list.length} smaller ones</span>`;
     return html;
   }
+
+  function lineHtml(l, R) {
+    let html = `<b>${fmtHz(l.f)} Hz</b>` + (l.image ? ' · <span class="r">image (above fs/2)</span>' : '') +
+      `<br>amplitude ${fmtAmp(l.amp)} · phase ${fmtDeg(l.ph)}`;
+    if (l.isDiff) {
+      html += l.oamp > 0
+        ? `<br><span class="r">original here: ${fmtAmp(l.oamp)} · ${fmtDeg(l.oph)}</span>`
+        : `<br><span class="r">not in the original: ${l.image ? 'an image left by the reconstruction' : 'pure alias'}</span>`;
+    }
+    const wName = R.s.method === 'linear' ? 'sinc²' : '|sinc|';
+    html += '<br><span class="m">made of:</span>';
+    const list = l.contrib.slice(0, 4);
+    for (const c of list) {
+      const fb = fmtHz(c.b.f);
+      const what = c.m === 0 ? `the ${fb} Hz component in 0…fs/2`
+        : `image ${c.mir ? `${c.m}·fs − ${fb}` : `${c.m}·fs + ${fb}`} Hz` + (c.mir ? ' (mirrored, phase flipped)' : '');
+      html += `<br><span class="m">${what}, × ${wName} = ${c.w.toFixed(4)}</span>`;
+    }
+    if (l.contrib.length > list.length) html += `<br><span class="m">… and ${l.contrib.length - list.length} more</span>`;
+    if (R.s.method === 'zoh' && l.contrib.length) html += '<br><span class="m">plus a half-sample delay (phase −180°·f/fs)</span>';
+    return html;
+  }
+
+  const RECON_TEXT = {
+    ideal: {
+      legend: 'ideal reconstruction (band-limited to fs/2)',
+      amp: 'of what the samples contain',
+      note: 'Ideal reconstruction puts a sinc pulse on every sample: it keeps exactly the band 0…fs/2 and nothing above it.',
+    },
+    linear: {
+      legend: 'linear interpolation (lines between samples)',
+      amp: 'of the reconstruction',
+      note: 'Joining the samples with straight lines leaves copies of the spectrum around fs, 2fs, … (attenuated by sinc²) ' +
+        'and slightly attenuates the band — a real DAC needs a reconstruction filter after it.',
+    },
+    zoh: {
+      legend: 'zero-order hold (staircase)',
+      amp: 'of the reconstruction',
+      note: 'Holding each sample until the next one, as a simple DAC does, leaves copies of the spectrum around fs, 2fs, … ' +
+        '(attenuated by |sinc|), attenuates the band more than lines do, and delays everything by half a sample.',
+    },
+  };
 
   // ---------------------------------------------------------------- text
 
@@ -556,12 +691,24 @@
       mt.className = 'metric' + (s.diff ? ' bad' : '');
       mt.textContent = `RMS difference, reconstruction − original: ${R.rmsErr.toPrecision(3)} ` +
         `(${(100 * rel).toPrecision(3)}% of the original's RMS).`;
+      if (s.filter && s.method !== 'ideal') {
+        mt.textContent += ' Not zero even with the anti-alias filter: the images above fs/2 and the droop in the band are the difference.';
+      }
     }
+
+    const rt = RECON_TEXT[s.method];
+    $('reconNote').textContent = rt.note;
+    $('stLegendRecon').textContent = rt.legend;
+    $('saWhat').textContent = rt.amp;
 
     const lostN = R.kept.filter((h) => !h.inBand && h.f <= R.fView).length;
     const aliasBins = R.bins.filter((b) => b.isDiff).length;
     let note = '';
-    if (s.diff && !s.filter) {
+    if (s.diff && s.method !== 'ideal') {
+      const img = R.lines.filter((l) => l.isDiff && l.image).length;
+      const inb = R.lines.filter((l) => l.isDiff && !l.image).length;
+      note = `Up to 2.5·fs, ${img} line${img === 1 ? '' : 's'} above fs/2 and ${inb} in 0…fs/2 differ from the original.`;
+    } else if (s.diff && !s.filter) {
       note = `${aliasBins} frequenc${aliasBins === 1 ? 'y' : 'ies'} in 0…fs/2 differ from the original.`;
       if (!s.wide && lostN) note += ` ${lostN} harmonics between fs/2 and 2.5·fs are lost from their true place; tick "wide axis" to see them.`;
     }
@@ -590,9 +737,11 @@
     $('cutCtl').classList.toggle('off', !state.filter);
     $('cutVal').textContent = `${Math.round(state.cutFrac * 100)}% of fs/2 = ${fmtHz(state.cutFrac * state.fs / 2)} Hz`;
     $('diff').checked = state.diff;
-    $('wide').checked = state.wide;
+    $('wide').checked = state.wide || state.method !== 'ideal';
+    $('wide').disabled = state.method !== 'ideal';
+    for (const r of document.querySelectorAll('input[name=recon]')) r.checked = r.value === state.method;
     document.body.classList.toggle('diff-on', state.diff);
-    document.body.classList.toggle('wide-on', state.wide && state.diff);
+    document.body.classList.toggle('wide-on', state.wide && state.diff && state.method === 'ideal');
     $('otLegendBL').hidden = !state.filter;
     $('otLegendSq').hidden = state.filter;
     $('oaLegendRem').hidden = !state.filter;
@@ -646,6 +795,11 @@
     $('cutRange').addEventListener('input', (e) => { state.cutFrac = +e.target.value / 100; schedule(); });
     $('diff').addEventListener('change', (e) => { state.diff = e.target.checked; schedule(); });
     $('wide').addEventListener('change', (e) => { state.wide = e.target.checked; schedule(); });
+    for (const r of document.querySelectorAll('input[name=recon]')) {
+      r.addEventListener('change', (e) => {
+        if (e.target.checked && METHODS.includes(e.target.value)) { state.method = e.target.value; schedule(); }
+      });
+    }
 
     const tip = $('tip');
     for (const c of [cv.OA, cv.OP, cv.SA, cv.SP]) {
@@ -691,6 +845,17 @@
       let mx = 0;
       for (let k = 0; k < r.K; k++) mx = Math.max(mx, Math.abs(at[k] - r.sampleVals[k]));
       return mx;
+    },
+    // The reconstruction at time t, straight from the samples (k = −1 … K).
+    reconAt(t) {
+      const r = window.__demo.last;
+      if (r.s.method === 'ideal') return evalSum(r.bins, t, 0, 1)[0];
+      return holdRecon(r.xs, r.s.method, r.s.fs, r.s.delta, t, 2)[1];
+    },
+    // The analytic line spectrum up to fMax, summed back in time on t = j·dt.
+    lineSum(fMax, dt, N) {
+      const r = window.__demo.last;
+      return evalSum(imageLines(r, fMax), 0, dt, N);
     },
   };
 
