@@ -1,8 +1,23 @@
-# Square wave aliasing demo
+# FourierDemo
+
+Two interactive pages about spectra, sampling and filtering. Plain HTML, CSS and JavaScript: no build step, no dependencies.
+
+## Run it
+
+```
+python -m http.server 8000 --bind 127.0.0.1
+```
+
+Run it from this folder, then open <http://127.0.0.1:8000/>. Opening `index.html` straight from disk also works.
+
+## Pages
+
+- [Sampling & aliasing](#sampling--aliasing) — `index.html`
+- [Spectrum × Filter](#spectrum--filter) — `filter.html`
+
+## Sampling & aliasing
 
 A single-page interactive demo of sampling, the Nyquist frequency and aliasing, using a square wave.
-
-## What it shows
 
 - **Original:** a square wave of frequency f0, with its Fourier series as amplitude and phase stems
   (odd harmonics n·f0, amplitude 4/(πn), phase −90° against a cosine reference). The frequency axis runs to
@@ -19,11 +34,7 @@ band-limit it first and sampling above twice its highest remaining harmonic give
 
 Hover (or tap) a stem to see its frequency, amplitude and phase, and which harmonics a sampled component is made of.
 
-## How to open it
-
-Open `index.html` in a browser, straight from disk. No build step, no server, no dependencies.
-
-## How it is computed
+### How it is computed
 
 Analytically, from the Fourier series. A harmonic at f with phase φ, sampled at t_k = (k + offset)/fs, gives the
 same samples as a component at f − m·fs (m = round(f/fs)) with phase φ + 2π·m·offset; a negative result is
@@ -31,3 +42,15 @@ mirrored and its phase sign flipped. Components on the same frequency are added 
 exactly fs/2 only the part the samples can see is kept. The reconstruction is the sum of these components, which
 equals ideal sinc interpolation of the samples. The harmonic sum runs to 40·fs (at least 200, at most 8000 odd
 harmonics). Ranges: f0 1–200 Hz, fs 10 Hz–5 kHz.
+
+## Spectrum × Filter
+
+Draw a spectrum and a filter, and see their product.
+
+- **Input:** draw the amplitude (0…1) and phase (±180°) of 65 harmonic bins, k = 0…64, and see the waveform
+  x(t) = Σ A_k cos(2πk t/T + φ_k) over two periods. Presets: sine, square, sawtooth, triangle, impulse, random.
+- **Filter:** draw a gain H_k (0…1.5) and a phase on the same bins. Presets: all-pass, low-pass, high-pass,
+  band-pass, notch, comb and a T/8 delay, each ideal or smooth, with cutoff and width sliders.
+- **Result:** Y_k = X_k · H_k (amplitudes multiply, phases add), as spectra and as the waveform y(t), with x(t)
+  drawn faintly for comparison. The filter's impulse response h(t) is shown too: multiplying spectra is the same
+  as circular convolution in time.
