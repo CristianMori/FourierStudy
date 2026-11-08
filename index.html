@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Square Wave Aliasing</title>
+<meta name="description" content="Interactive demo: sampling a square wave, the Nyquist frequency, aliasing, and why an anti-alias filter makes reconstruction exact.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="wrap">
+  <h1>Sampling a square wave: Nyquist, aliasing and the anti-alias filter</h1>
+  <p class="lede">A square wave is a sum of sine waves at f0, 3·f0, 5·f0, … that never ends. Sample it, and every harmonic
+    above fs/2 folds back into the band 0…fs/2. Filter those harmonics out first, and the samples give the signal back exactly.</p>
+</header>
+
+<main class="wrap">
+  <section class="card controls" aria-label="Controls">
+    <div class="ctl">
+      <div class="ctl-head">
+        <label for="f0Range">Square-wave frequency <i>f0</i></label>
+        <span class="num"><input type="number" id="f0Num" min="1" max="200" step="any" inputmode="decimal"> Hz</span>
+      </div>
+      <input type="range" id="f0Range" min="0" max="1000" step="1">
+    </div>
+
+    <div class="ctl">
+      <div class="ctl-head">
+        <label for="fsRange">Sampling frequency <i>fs</i></label>
+        <span class="num"><input type="number" id="fsNum" min="10" max="5000" step="any" inputmode="decimal"> Hz</span>
+      </div>
+      <input type="range" id="fsRange" min="0" max="1000" step="1">
+      <div class="presets" role="group" aria-label="Sampling frequency presets">
+        <button type="button" data-fs="50">50</button>
+        <button type="button" data-fs="100">100</button>
+        <button type="button" data-fs="250">250</button>
+        <button type="button" data-fs="500">500</button>
+        <button type="button" data-fs="1000">1 k</button>
+        <button type="button" data-fs="2000">2 k</button>
+        <button type="button" data-fs="5000">5 k</button>
+        <button type="button" data-rel="2">2·f0</button>
+        <button type="button" data-rel="10">10·f0</button>
+        <button type="button" data-rel="40">40·f0</button>
+      </div>
+    </div>
+
+    <div class="ctl">
+      <div class="ctl-head">
+        <label for="offRange">Sampling offset</label>
+        <span class="val" id="offVal"></span>
+      </div>
+      <input type="range" id="offRange" min="0" max="1" step="0.01">
+    </div>
+
+    <div class="filter-box">
+      <label class="big-toggle">
+        <input type="checkbox" id="filter">
+        <span>Band-limit the square wave before sampling <b>(anti-alias filter)</b></span>
+      </label>
+      <div class="ctl" id="cutCtl">
+        <div class="ctl-head">
+          <label for="cutRange">Filter cutoff</label>
+          <span class="val" id="cutVal"></span>
+        </div>
+        <input type="range" id="cutRange" min="5" max="100" step="1">
+      </div>
+    </div>
+
+    <label class="toggle diff-toggle">
+      <input type="checkbox" id="diff">
+      <span>Show difference from original in <span class="red">red</span></span>
+    </label>
+
+    <p class="status" id="status" aria-live="polite"></p>
+  </section>
+
+  <div class="panels">
+    <section class="card panel" aria-labelledby="hOrig">
+      <h2 id="hOrig"><span class="step">1</span> Original</h2>
+      <figure class="plot">
+        <figcaption><b>Signal</b> <span class="axis-note" id="otUnit"></span>
+          <span class="legend"><span id="otLegendSq"><i class="sw orig"></i>square wave</span> <span id="otLegendBL" hidden><i class="sw orig"></i>band-limited (what gets sampled) <i class="sw ghost dashed"></i>ideal square</span></span>
+        </figcaption>
+        <canvas id="cvOT" class="tall"></canvas>
+      </figure>
+      <figure class="plot">
+        <figcaption><b>Amplitude</b> vs frequency (Hz)
+          <span class="legend"><i class="sw orig"></i>harmonic 4/(πn), n odd <span id="oaLegendRem" hidden><i class="sw ghost dashed"></i>removed by filter</span></span>
+        </figcaption>
+        <canvas id="cvOA" class="mid"></canvas>
+      </figure>
+      <figure class="plot">
+        <figcaption><b>Phase</b> (degrees, cosine reference) vs frequency (Hz)</figcaption>
+        <canvas id="cvOP" class="short"></canvas>
+      </figure>
+    </section>
+
+    <section class="card panel" aria-labelledby="hSamp">
+      <h2 id="hSamp"><span class="step">2</span> Sampled at <i>fs</i></h2>
+      <figure class="plot">
+        <figcaption><b>Samples and reconstruction</b> <span class="axis-note" id="stUnit"></span>
+          <span class="legend"><i class="sw ghost"></i>original <i class="dot sample"></i>samples <i class="sw recon"></i>ideal reconstruction (band-limited to fs/2) <span class="diff-only"><i class="sw err block"></i>difference</span></span>
+        </figcaption>
+        <canvas id="cvST" class="tall"></canvas>
+      </figure>
+      <p class="metric" id="metric"></p>
+      <figure class="plot">
+        <figcaption><b>Amplitude</b> of what the samples contain vs frequency (Hz)
+          <label class="toggle small"><input type="checkbox" id="wide"> wide axis (to 2.5·fs)</label>
+          <span class="legend"><i class="sw recon"></i>same as original <span class="diff-only"><i class="sw err"></i>differs (alias / changed) <i class="ring orig"></i>original value <span class="wide-only"><i class="sw err dashed faint"></i>lost (above fs/2)</span></span></span>
+        </figcaption>
+        <canvas id="cvSA" class="mid"></canvas>
+      </figure>
+      <figure class="plot">
+        <figcaption><b>Phase</b> (degrees, cosine reference) vs frequency (Hz)</figcaption>
+        <canvas id="cvSP" class="short"></canvas>
+      </figure>
+      <p class="note" id="lostNote"></p>
+    </section>
+  </div>
+
+  <section class="card explain" aria-labelledby="hExplain">
+    <h2 id="hExplain">What this shows</h2>
+    <p>The sampling theorem says: if a signal has no frequency content at or above fs/2, its samples determine it
+      completely, and ideal reconstruction gives it back exactly. That holds for every signal, square waves included.
+      The theorem has a condition, though, and a square wave does not meet it.</p>
+    <p>A square wave of frequency f0 is the sum of sine waves at f0, 3·f0, 5·f0, … with amplitudes 4/(πn). The series
+      never ends, so the square wave is not band-limited: whatever fs you choose, it has harmonics above fs/2. Those
+      harmonics do not vanish when you sample. They show up in the samples as other frequencies inside 0…fs/2 (the
+      red stems). That is aliasing, and it is what the theorem predicts when its condition is broken.</p>
+    <p>Now switch on the anti-alias filter. It removes every harmonic at or above the cutoff before sampling, so the
+      condition holds. The reconstruction then matches the filtered signal to rounding error, Gibbs ringing included.
+      The ringing comes from cutting off the harmonics, not from sampling.</p>
+    <p>So the honest summary is: a perfect square wave cannot be sampled without aliasing, because it is not
+      band-limited. That is not an exception to Nyquist; it is Nyquist.</p>
+    <p class="fine">How it is computed: the square wave is sign(sin 2πf0t) = Σ (4/πn)·cos(2πnf0t − 90°) over odd n.
+      A harmonic at f = n·f0 with phase φ, sampled at t<sub>k</sub> = (k + offset)/fs, gives the same samples as a
+      component at f − m·fs with phase φ + 2π·m·offset, where m = round(f/fs). If that frequency is negative it is
+      mirrored to positive and its phase changes sign. Components landing on the same frequency are added as complex
+      phasors; at exactly fs/2 only the part the samples can see survives. The reconstruction is the sum of these
+      baseband components, which is the same as ideal sinc interpolation of the samples. The sum uses odd harmonics up
+      to 40·fs (at least 200, at most 8000 of them).</p>
+  </section>
+</main>
+
+<div class="tip" id="tip" role="tooltip" hidden></div>
+<script src="app.js"></script>
+</body>
+</html>
