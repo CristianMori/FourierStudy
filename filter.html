@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spectrum × Filter</title>
+<link rel="stylesheet" href="filter.css">
+</head>
+<body>
+<header class="site-header">
+  <h1>Spectrum × Filter</h1>
+  <nav id="pages"></nav>
+</header>
+
+<main>
+  <section class="intro">
+    <p>
+      A periodic signal is a sum of harmonics:
+      <span class="math">x(t) = Σ A<sub>k</sub> cos(2π k t / T + φ<sub>k</sub>)</span>, for k = 0 … 64.
+      Drag across the bars to draw the amplitudes A<sub>k</sub> and phases φ<sub>k</sub>; the waveform follows as you draw.
+    </p>
+    <p>
+      A filter is a second spectrum H<sub>k</sub>: a gain and a phase shift for each harmonic.
+      Filtering multiplies the two spectra bin by bin (amplitudes multiply, phases add), and the result is a new waveform.
+      A phase of −90° turns a cosine into a sine; positive phase moves a harmonic earlier in time.
+    </p>
+  </section>
+
+  <section class="panel" id="panel-input">
+    <h2><span class="swatch sw-in"></span><span>Input spectrum X<sub>k</sub></span></h2>
+    <div class="toolbar" id="input-presets">
+      <button data-preset="clear">Clear</button>
+      <button data-preset="sine">Sine</button>
+      <button data-preset="square">Square</button>
+      <button data-preset="sawtooth">Sawtooth</button>
+      <button data-preset="triangle">Triangle</button>
+      <button data-preset="impulse">Impulse</button>
+      <button data-preset="random">Random</button>
+      <button data-preset="zerophase" class="quiet">Phase → 0</button>
+    </div>
+    <div class="panel-body">
+      <div class="spec-col">
+        <div class="plot-label">Amplitude A<sub>k</sub> <span class="hint">draw</span></div>
+        <canvas class="plot amp" id="in-amp"></canvas>
+        <div class="plot-label">Phase φ<sub>k</sub> (°) <span class="hint">draw</span></div>
+        <canvas class="plot phase" id="in-phase"></canvas>
+      </div>
+      <div class="wave-col">
+        <div class="plot-label">Waveform x(t), two periods</div>
+        <canvas class="plot wave" id="in-wave"></canvas>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel" id="panel-filter">
+    <h2><span class="swatch sw-filt"></span><span>Filter H<sub>k</sub></span></h2>
+    <div class="toolbar" id="filter-presets">
+      <button data-preset="allpass">All-pass</button>
+      <button data-preset="lowpass">Low-pass</button>
+      <button data-preset="highpass">High-pass</button>
+      <button data-preset="bandpass">Band-pass</button>
+      <button data-preset="notch">Notch</button>
+      <button data-preset="comb">Comb</button>
+      <button data-preset="delay">Delay T/8</button>
+      <button data-preset="zerophase" class="quiet">Phase → 0</button>
+    </div>
+    <div class="toolbar controls">
+      <div class="segmented" role="group" aria-label="Filter shape">
+        <button id="shape-ideal" aria-pressed="true">Ideal</button>
+        <button id="shape-smooth" aria-pressed="false">Smooth</button>
+      </div>
+      <label class="slider">k₀ <input type="range" id="k0" min="1" max="64" value="10"><output id="k0-out">10</output></label>
+      <label class="slider">width <input type="range" id="width" min="1" max="32" value="6"><output id="width-out">6</output></label>
+      <span class="hint" id="filter-status"></span>
+    </div>
+    <div class="panel-body">
+      <div class="spec-col">
+        <div class="plot-label">Gain |H<sub>k</sub>| <span class="hint">draw · dashed line = 1</span></div>
+        <canvas class="plot amp" id="filt-amp"></canvas>
+        <div class="plot-label">Phase shift θ<sub>k</sub> (°) <span class="hint">draw</span></div>
+        <canvas class="plot phase" id="filt-phase"></canvas>
+      </div>
+      <div class="wave-col">
+        <div class="plot-label">Impulse response h(t), centred on t = 0</div>
+        <canvas class="plot wave" id="filt-impulse"></canvas>
+        <p class="note">
+          h(t) is the waveform whose spectrum is H. Multiplying spectra is the same as
+          circular convolution in time: y(t) = (1/T) ∫ x(τ) h(t − τ) dτ over one period.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel" id="panel-result">
+    <h2><span class="swatch sw-out"></span><span>Result Y<sub>k</sub> = X<sub>k</sub> · H<sub>k</sub></span></h2>
+    <div class="panel-body">
+      <div class="spec-col">
+        <div class="plot-label">Amplitude A<sub>k</sub>·|H<sub>k</sub>|</div>
+        <canvas class="plot amp" id="out-amp"></canvas>
+        <div class="plot-label">Phase φ<sub>k</sub> + θ<sub>k</sub> (°), wrapped to ±180</div>
+        <canvas class="plot phase" id="out-phase"></canvas>
+      </div>
+      <div class="wave-col">
+        <div class="plot-label">
+          Waveform y(t)
+          <span class="legend"><i class="ln ln-out"></i>result <i class="ln ln-in"></i>input</span>
+        </div>
+        <canvas class="plot wave" id="out-wave"></canvas>
+      </div>
+    </div>
+  </section>
+</main>
+
+<script src="filter.js"></script>
+</body>
+</html>
