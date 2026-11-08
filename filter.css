@@ -143,6 +143,9 @@ button[aria-pressed="true"], button.active {
   box-shadow: inset 0 0 0 1px var(--c-in);
 }
 
+.group-label { color: var(--muted); font-size: 0.82rem; margin-right: 2px; }
+.note a { color: inherit; }
+
 .segmented { display: inline-flex; }
 .segmented button { border-radius: 0; }
 .segmented button:first-child { border-radius: 6px 0 0 6px; }
