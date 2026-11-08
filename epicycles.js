@@ -17,7 +17,7 @@ const S = {
   skeleton: null, strokes: [], path: null, sig: null, ax: null, ay: null,
   N: 1024, fx: 1, fy: 1, Mx: 1, My: 1,
   t: 0, playing: true, speed: 1,
-  prev: null, fps: 0, frameMs: 0, drawMs: 0,
+  prev: null, cprev: null, cam: null, follower: 'knife', rho: 10, fps: 0, frameMs: 0, drawMs: 0,
   dirty: 0, theme: null, layout: null, stats: {},
 };
 
@@ -37,7 +37,7 @@ function readTheme() {
   const cs = getComputedStyle(document.documentElement);
   const v = n => cs.getPropertyValue(n).trim();
   S.theme = { ink: v('--ink'), muted: v('--muted'), line: v('--line'), grid: v('--grid'), axis: v('--axis'),
-    x: v('--c-x'), y: v('--c-y'), pen: v('--c-pen'), bridge: v('--c-bridge'), ref: v('--c-ref'),
+    x: v('--c-x'), y: v('--c-y'), pen: v('--c-pen'), bridge: v('--c-bridge'), bad: v('--c-bad'), ref: v('--c-ref'),
     dark: matchMedia('(prefers-color-scheme: dark)').matches };
 }
 
@@ -490,6 +490,7 @@ function updateM() {
   $('o-my').textContent = S.My + ' / ' + H;
   S.partX = partialSignal(S.ax, S.Mx);
   S.partY = partialSignal(S.ay, S.My);
+  buildCams();
   resetTrail();
   drawSignals(); drawSpectra();
 }
@@ -697,14 +698,16 @@ function layoutStage() {
   const dwMax = W - M0, dhMax = Math.min(dwMax, 640);
   const s = Math.min(dwMax / S.w, dhMax / S.h);
   const dw = S.w * s, dh = S.h * s, H = Math.round(M0 + dh);
-  c.style.height = H + 'px';
+  c.style.height = H + 'px'; $('cam').style.height = H + 'px';
   const dpr = window.devicePixelRatio || 1;
   const pw = Math.round(W * dpr), ph = Math.round(H * dpr);
   const lay = { W, H, M0, s, dw, dh, dpr };
   if (c.width !== pw || c.height !== ph || !S.trail || S.trail.width !== pw || S.trail.height !== ph) {
     c.width = pw; c.height = ph;
     S.trail = document.createElement('canvas'); S.trail.width = pw; S.trail.height = ph;
-    S.prev = null;
+    $('cam').width = pw; $('cam').height = ph;
+    S.ctrail = document.createElement('canvas'); S.ctrail.width = pw; S.ctrail.height = ph;
+    S.prev = S.cprev = null;
   }
   S.layout = lay;
   return lay;
@@ -712,26 +715,27 @@ function layoutStage() {
 
 function resetTrail() {
   if (S.trail) S.trail.getContext('2d').clearRect(0, 0, S.trail.width, S.trail.height);
-  S.prev = null; S.t = 0;
+  if (S.ctrail) S.ctrail.getContext('2d').clearRect(0, 0, S.ctrail.width, S.ctrail.height);
+  S.prev = S.cprev = null; S.t = 0;
   requestDraw();
 }
 
 // pen position in the picture, from the two independent chains
 function penAt(t, Mx, My) { return [chainTip(S.ax, t, Mx), chainTip(S.ay, t, My === undefined ? Mx : My)]; }
 
-function stepTrail(lay, pen, t) {
-  const g = S.trail.getContext('2d');
+function stepTrail(lay, pen, t, cam) {
+  const g = (cam ? S.ctrail : S.trail).getContext('2d'), prev = cam ? S.cprev : S.prev;
   g.setTransform(lay.dpr, 0, 0, lay.dpr, 0, 0);
   const sx = lay.M0 + pen[0] * lay.s, sy = lay.M0 + pen[1] * lay.s;
-  if (S.prev) {
+  if (prev) {
     const bridge = S.sig.b[Math.floor(t * S.N + 0.5) % S.N] === 1;
     if (!(bridge && $('c-penup').checked)) {
-      g.beginPath(); g.moveTo(S.prev[0], S.prev[1]); g.lineTo(sx, sy);
+      g.beginPath(); g.moveTo(prev[0], prev[1]); g.lineTo(sx, sy);
       g.strokeStyle = S.theme.pen; g.globalAlpha = bridge ? 0.45 : 1; g.lineWidth = bridge ? 1 : 2; g.lineCap = 'round'; g.stroke();
       g.globalAlpha = 1;
     }
   }
-  S.prev = [sx, sy];
+  if (cam) S.cprev = [sx, sy]; else S.prev = [sx, sy];
 }
 
 const posX = [], posY = [];
@@ -808,8 +812,125 @@ function drawStage() {
   $('cur-y').style.left = 'calc(40px + (100% - 46px) * ' + S.t + ')';
 }
 
+// ---------- 7. cams ----------
+// One cam per axis, one turn per lap. Follower displacement s(θ) = x(θ) - min x, from the band-limited series (the
+// same circles as above). Pitch curve r(θ) = Rb + s(θ). A knife-edge follower rides the pitch curve itself; a roller of
+// radius ρ rides the inner offset of it, and the offset has a cusp (undercut) where the pitch curve is convex with
+// radius of curvature below ρ. Pressure angle (radial translating follower): tan φ = r'(θ) / r(θ).
+function camProfile(part, rho, roller) {
+  const N = part.length, da = TAU / N;
+  let mn = Infinity, mx = -Infinity;
+  for (let i = 0; i < N; i++) { mn = Math.min(mn, part[i]); mx = Math.max(mx, part[i]); }
+  const smax = mx - mn, Rb = 0.6 * smax + 10;
+  const sd = new Float64Array(N), r = new Float64Array(N);
+  for (let i = 0; i < N; i++) { sd[i] = part[i] - mn; r[i] = Rb + sd[i]; }
+  const outline = new Path2D(), pitch = new Path2D(), bad = new Path2D();
+  const px = new Float64Array(N), py = new Float64Array(N), uc = new Uint8Array(N);
+  let maxPress = 0, nUc = 0;
+  for (let i = 0; i < N; i++) {
+    const a = i * da, c = Math.cos(a), sn = Math.sin(a), r0 = r[i];
+    const rp = (r[(i + 1) % N] - r[(i - 1 + N) % N]) / (2 * da);
+    const rpp = (r[(i + 1) % N] - 2 * r0 + r[(i - 1 + N) % N]) / (da * da);
+    const Tx = rp * c - r0 * sn, Ty = rp * sn + r0 * c, T2 = Tx * Tx + Ty * Ty, T = Math.sqrt(T2);
+    const kappa = (r0 * r0 + 2 * rp * rp - r0 * rpp) / (T2 * T);
+    maxPress = Math.max(maxPress, Math.atan(Math.abs(rp) / r0));
+    let x = r0 * c, y = r0 * sn;
+    if (i) pitch.lineTo(x, y); else pitch.moveTo(x, y);
+    if (roller) { x -= rho * Ty / T; y += rho * Tx / T; }        // offset inward along the outward normal (Ty, -Tx)/|T|
+    px[i] = x; py[i] = y;
+    uc[i] = roller && kappa > 0 && 1 - rho * kappa < 0 ? 1 : 0;
+    nUc += uc[i];
+    if (i) outline.lineTo(x, y); else outline.moveTo(x, y);
+  }
+  outline.closePath(); pitch.closePath();
+  for (let i = 0; i < N; i++) if (uc[i]) {
+    const j = (i + 1) % N;
+    bad.moveTo(px[i], py[i]); bad.lineTo(px[j], py[j]);
+  }
+  return { N, min: mn, s: sd, r, Rb, smax, outline, pitch, bad, px, py, uc, nUc, maxPress: maxPress * 180 / Math.PI };
+}
+
+function buildCams() {
+  if (!S.partX) { S.cam = null; return; }
+  const roller = S.follower === 'roller';
+  S.cam = { x: camProfile(S.partX, S.rho, roller), y: camProfile(S.partY, S.rho, roller), roller };
+  const cx = S.cam.x, cy = S.cam.y;
+  const bad = [];
+  if (cx.nUc) bad.push('X');
+  if (cy.nUc) bad.push('Y');
+  const press = (n, c) => n + ' cam: max pressure angle ' + fmt(c.maxPress, 0) + '°';
+  $('st-cam').innerHTML = press('X', cx) + ', ' + press('Y', cy) + (cx.maxPress > 30 || cy.maxPress > 30 ? ' (above about 30° a real follower jams)' : '') + '. ' +
+    (roller ? (bad.length ? '<span class="bad">Undercut on the ' + bad.join(' and ') + ' cam (red): it cannot be made with a roller of radius ' + S.rho + ' px.</span>'
+                          : 'No undercut with a roller of radius ' + S.rho + ' px.')
+            : 'Knife-edge follower: exact for any profile.');
+}
+
+// pen position read back from the two cam profiles (linear interpolation between the N profile samples)
+function camAt(cm, t) {
+  const u = t * cm.N, i = Math.floor(u), f = u - i;
+  return cm.min + (1 - f) * cm.s[i % cm.N] + f * cm.s[(i + 1) % cm.N];
+}
+function camPen(t) { return [camAt(S.cam.x, t), camAt(S.cam.y, t)]; }
+
+function drawCam() {
+  const lay = S.layout, c = $('cam');
+  if (!lay) return;
+  const g = c.getContext('2d'), th = S.theme, cm = S.cam;
+  g.setTransform(lay.dpr, 0, 0, lay.dpr, 0, 0);
+  g.clearRect(0, 0, lay.W, lay.H);
+  const { M0, s: sc, dw, dh, W, H } = lay;
+  g.strokeStyle = th.line; g.lineWidth = 1; g.strokeRect(M0 + 0.5, M0 + 0.5, dw - 1, dh - 1);
+  if (!cm) { emptyMsg(g, W, H, 'nothing to draw yet: no closed path'); return; }
+  g.drawImage(S.ctrail, 0, 0, W, H);
+  const th2 = TAU * S.t, rodEnd = 0.47 * M0;
+  const [px, py] = camPen(S.t);
+  const pen = [M0 + px * sc, M0 + py * sc];
+  const one = (c1, cx, cy, psi, colour) => {
+    const cs = 0.42 * M0 / (c1.Rb + c1.smax);
+    const rc = c1.Rb + camAt({ N: c1.N, min: 0, s: c1.s }, S.t);        // pitch radius under the follower
+    g.save();
+    g.translate(cx, cy); g.rotate(psi - th2); g.scale(cs, cs);
+    g.lineJoin = 'round'; g.lineWidth = 1.6 / cs; g.strokeStyle = colour;
+    g.globalAlpha = 0.1; g.fillStyle = colour; g.fill(c1.outline); g.globalAlpha = 1;
+    g.stroke(c1.outline);
+    if (cm.roller) {
+      g.globalAlpha = 0.5; g.lineWidth = 1 / cs; g.setLineDash([4 / cs, 3 / cs]); g.stroke(c1.pitch); g.setLineDash([]); g.globalAlpha = 1;
+      g.lineWidth = 2.6 / cs; g.strokeStyle = th.bad; g.stroke(c1.bad);
+    }
+    g.lineWidth = 1 / cs; g.strokeStyle = th.muted;                      // a mark on the cam so its turning shows
+    g.beginPath(); g.moveTo(0, 0); g.lineTo(c1.Rb * 0.35, 0); g.stroke();
+    g.restore();
+    g.fillStyle = th.ink; g.beginPath(); g.arc(cx, cy, 2.5, 0, TAU); g.fill();
+    const ux = Math.cos(psi), uy = Math.sin(psi);
+    const tx = cx + ux * cs * rc, ty = cy + uy * cs * rc;                // follower tip (knife) or roller centre
+    g.strokeStyle = th.ink; g.lineWidth = 2; g.beginPath(); g.moveTo(tx, ty); g.lineTo(cx + ux * rodEnd, cy + uy * rodEnd); g.stroke();
+    if (cm.roller) { g.beginPath(); g.arc(tx, ty, S.rho * cs, 0, TAU); g.fillStyle = th.panel; g.fill(); g.stroke(); }
+    else { g.fillStyle = th.ink; g.beginPath(); g.arc(tx, ty, 3, 0, TAU); g.fill(); }
+    g.fillStyle = th.ink; g.fillRect(cx + ux * rodEnd - 3, cy + uy * rodEnd - 3, 6, 6);
+    return [cx + ux * rodEnd, cy + uy * rodEnd, cs];
+  };
+  // X cam above the picture, follower sliding horizontally; Y cam left of it, follower sliding vertically
+  const ex = one(cm.x, M0 + dw / 2, M0 / 2, 0, th.x);
+  const ey = one(cm.y, M0 / 2, M0 + dh / 2, Math.PI / 2, th.y);
+  // lever from follower to slide bar (the cams are drawn smaller than the picture, so the motion is magnified)
+  g.save(); g.setLineDash([4, 3]); g.lineWidth = 1;
+  g.strokeStyle = th.x; g.beginPath(); g.moveTo(ex[0], ex[1]); g.lineTo(pen[0], ex[1]); g.stroke();
+  g.strokeStyle = th.y; g.beginPath(); g.moveTo(ey[0], ey[1]); g.lineTo(ey[0], pen[1]); g.stroke();
+  g.restore();
+  // cross-slide: the X bar is vertical and slides sideways, the Y bar is horizontal and slides up and down
+  g.lineWidth = 3; g.lineCap = 'round';
+  g.strokeStyle = th.x; g.beginPath(); g.moveTo(pen[0], ex[1]); g.lineTo(pen[0], pen[1]); g.stroke();
+  g.strokeStyle = th.y; g.beginPath(); g.moveTo(ey[0], pen[1]); g.lineTo(pen[0], pen[1]); g.stroke();
+  g.lineCap = 'butt';
+  g.fillStyle = th.pen; g.strokeStyle = th.ink; g.lineWidth = 1.2;
+  g.beginPath(); g.arc(pen[0], pen[1], 4.5, 0, TAU); g.fill(); g.stroke();
+  g.fillStyle = th.muted; g.font = '11px system-ui, sans-serif';
+  g.fillText('X cam → slide bar → pen x', M0 + 6, 14); g.fillText('Y cam', 6, M0 + 14); g.fillText('→ pen y', 6, M0 + 27);
+  S.camScale = [ex[2], ey[2]];
+}
+
 let drawQueued = false;
-function requestDraw() { if (!drawQueued && !S.playing) { drawQueued = true; requestAnimationFrame(() => { drawQueued = false; drawStage(); }); } }
+function requestDraw() { if (!drawQueued && !S.playing) { drawQueued = true; requestAnimationFrame(() => { drawQueued = false; drawStage(); drawCam(); }); } }
 
 // ---------- animation loop ----------
 let last = 0, frames = 0, fpsT = 0, drawAcc = 0;
@@ -826,9 +947,10 @@ function frame(now) {
       let t = S.t + dT / sub; if (t >= 1) t -= 1; if (t < 0) t += 1;
       S.t = t;
       stepTrail(S.layout, penAt(t, S.Mx, S.My), t);
+      if (S.cam) stepTrail(S.layout, camPen(t), t, true);
     }
   }
-  if (S.playing || drawQueued) drawStage();
+  if (S.playing || drawQueued) { drawStage(); drawCam(); }
   drawAcc += performance.now() - t0;
   frames++;
   if (now - fpsT > 1000) {
@@ -852,7 +974,7 @@ function flush() {
 // ---------- samples and input ----------
 function makeSample() {
   const c = document.createElement('canvas'); c.width = 640; c.height = 480;
-  const g = c.getContext('2d');
+  const g = c.getContext('2d', { willReadFrequently: true });     // software canvas: reads back reliably
   g.fillStyle = '#fff'; g.fillRect(0, 0, 640, 480);
   g.strokeStyle = '#000'; g.lineWidth = 7; g.lineJoin = 'round'; g.lineCap = 'round';
   const poly = pts => { g.beginPath(); pts.forEach((p, i) => i ? g.lineTo(p[0], p[1]) : g.moveTo(p[0], p[1])); g.stroke(); };
@@ -872,8 +994,12 @@ function makeSample() {
 
 function useSample() {
   setMode('lines', true);
-  const c = makeSample();
-  setSource(c, c.width, c.height, 'built-in sample');
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const c = makeSample();
+    setSource(c, c.width, c.height, 'built-in sample');
+    let mn = 255; for (let i = 0; i < S.gray.length; i++) if (S.gray[i] < mn) mn = S.gray[i];
+    if (mn < 128) break;                    // the sample has black lines: a blank read-back means the canvas failed, draw it again
+  }
 }
 
 async function loadFile(file) {
@@ -930,13 +1056,19 @@ function init() {
   $('p-n').addEventListener('input', () => { S.N = Math.pow(2, +$('p-n').value); showOutputs(); invalidate(1); });
   $('c-bridges').addEventListener('change', () => { readTheme(); drawConnectView(); });
 
-  $('b-play').addEventListener('click', () => {
+  const togglePlay = () => {
     S.playing = !S.playing;
-    $('b-play').textContent = S.playing ? 'Pause' : 'Play';
-    $('b-play').setAttribute('aria-pressed', String(S.playing));
+    for (const id of ['b-play', 'b-play2']) { $(id).textContent = S.playing ? 'Pause' : 'Play'; $(id).setAttribute('aria-pressed', String(S.playing)); }
     if (S.playing) { last = performance.now(); }
-  });
-  $('b-reset').addEventListener('click', resetTrail);
+  };
+  $('b-play').addEventListener('click', togglePlay); $('b-play2').addEventListener('click', togglePlay);
+  $('b-reset').addEventListener('click', resetTrail); $('b-reset2').addEventListener('click', resetTrail);
+  document.querySelectorAll('#follower button').forEach(b => b.addEventListener('click', () => {
+    S.follower = b.dataset.f;
+    document.querySelectorAll('#follower button').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+    buildCams(); requestDraw();
+  }));
+  $('p-rho').addEventListener('input', () => { S.rho = +$('p-rho').value; $('o-rho').textContent = S.rho + ' px'; buildCams(); requestDraw(); });
   // X and Y circle counts are independent; "link" makes a change to one move the other
   const setFrac = (axis, f) => {
     f = Math.max(0, Math.min(1, f));
@@ -970,9 +1102,9 @@ function redrawAll() {
   if (!S.gray) return;
   readTheme();
   if (S.stats.vec) { drawVectorViews(); drawConnectView(); drawSignals(); drawSpectra(); }
-  drawStage();
+  drawStage(); drawCam();
 }
 
-window.epicycles = { S, chainTip, penAt, analyse, fft, resample, connect, partialSignal, loadFile, flush, drawStage };
+window.epicycles = { S, camPen, chainTip, penAt, analyse, fft, resample, connect, partialSignal, loadFile, flush, drawStage };
 init();
 })();

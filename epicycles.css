@@ -13,6 +13,7 @@
   --c-pen: #17895f;
   --c-bridge: #b0449a;
   --c-ref: #8d8a82;
+  --c-bad: #d03030;
   color-scheme: light;
 }
 
@@ -32,6 +33,7 @@
     --c-pen: #3fc994;
     --c-bridge: #e07ccb;
     --c-ref: #8a909b;
+    --c-bad: #ff6b6b;
     color-scheme: dark;
   }
 }
@@ -51,6 +53,7 @@
   --c-pen: #3fc994;
   --c-bridge: #e07ccb;
   --c-ref: #8a909b;
+  --c-bad: #ff6b6b;
   color-scheme: dark;
 }
 
@@ -106,6 +109,7 @@ main { max-width: 1200px; margin: 0 auto; padding: 0 16px 40px; }
 .sw-3 { background: var(--c-x); }
 .sw-4 { background: var(--c-y); }
 .sw-5 { background: var(--c-pen); }
+.sw-6 { background: var(--c-ref); }
 
 .step { max-width: 860px; margin: 0 0 10px; color: var(--muted); font-size: 0.92rem; }
 .step b, .step i { color: var(--ink); }
@@ -178,7 +182,7 @@ button[aria-pressed="true"] { border-color: var(--c-pen); box-shadow: inset 0 0 
 .ln-ap { border-top: 2px dashed var(--c-ref); }
 
 .stage-wrap { width: 100%; }
-#stage { display: block; width: 100%; height: 600px; border-radius: 6px; background: var(--bg); }
+#stage, #cam { display: block; width: 100%; height: 600px; border-radius: 6px; background: var(--bg); }
 
 @media (max-width: 760px) {
   .views.three, .views.two { grid-template-columns: minmax(0, 1fr); }
@@ -188,4 +192,5 @@ button[aria-pressed="true"] { border-color: var(--c-pen); box-shadow: inset 0 0 
   .slider input { width: 110px; }
 }
 
+#st-cam .bad { color: var(--c-bad); }
 #o-mx, #o-my { min-width: 8ch; }

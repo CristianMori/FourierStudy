@@ -152,6 +152,36 @@
       <a href="index.html">sampling page</a> and the low-pass presets on the <a href="filter.html">filter page</a>.
     </p>
   </section>
+
+  <section class="panel" id="panel-cam">
+    <h2><span class="swatch sw-6"></span><span>7 · Cam mechanism</span></h2>
+    <p class="step">
+      A cam turns rotation into a prescribed back-and-forth motion: a follower pressed against its edge slides in and out as the
+      cam turns. Here each axis gets one cam on a shaft that turns once per lap, with the outline r(θ) = R<sub>base</sub> + x(θ) − min x,
+      so one cam stores the whole Fourier series of its axis. The X follower drives a vertical bar sideways, the Y follower drives a
+      horizontal bar up and down, and the pen sits where the bars cross. The circle chains and the cams make the same motion and the
+      same drawing, from the same circle counts. The cams are drawn smaller than the picture, so a lever (dashed) magnifies
+      each follower's travel.
+    </p>
+    <div class="toolbar controls">
+      <button id="b-play2" aria-pressed="true">Pause</button>
+      <button id="b-reset2">Reset trail</button>
+      <span class="group-label">Follower</span>
+      <span class="segmented" id="follower">
+        <button data-f="knife" aria-pressed="true">knife-edge</button>
+        <button data-f="roller" aria-pressed="false">roller</button>
+      </span>
+      <label class="slider">roller radius <input type="range" id="p-rho" min="1" max="60" step="1" value="10"><output id="o-rho">10 px</output></label>
+    </div>
+    <canvas id="cam"></canvas>
+    <p class="note" id="st-cam"></p>
+    <p class="note">
+      With many circles the cam becomes very wiggly: the sharp corners of the drawing become sharp features on the cam, and a roller
+      cannot follow them (red). That is why real harmonic machines, such as Kelvin's tide predictor, use one simple cam or crank per
+      harmonic and add the motions with a cord or linkage. (A one-cam-per-harmonic view is not shown here.) Circle counts, speed and
+      play/pause are shared with step 6.
+    </p>
+  </section>
 </main>
 
 <script src="epicycles.js"></script>
