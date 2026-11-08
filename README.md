@@ -59,6 +59,10 @@ Draw a spectrum and a filter, and see their product.
   x(t) = Σ A_k cos(2πk t/T + φ_k) over two periods. Presets: sine, square, sawtooth, triangle, impulse, random.
 - **Filter:** draw a gain H_k (0…1.5) and a phase on the same bins. Presets: all-pass, low-pass, high-pass,
   band-pass, notch, comb and a T/8 delay, each ideal or smooth, with cutoff and width sliders.
+- **Interpolation kernels:** Linear, Cubic (Catmull-Rom), Gaussian, Sinc (ideal) and Lanczos-3 as filters. Each is
+  the kernel's Fourier transform Ĥ (Ĥ(0) = 1) for samples Ts = T/(2k₀) apart, so H_k = Ĥ(k/(2k₀)) and the k₀ slider
+  is their Nyquist bin. Linear is sinc², Gaussian (σ = Ts/2) is a Gaussian, Sinc is a rect (½ at k₀); Catmull-Rom
+  and Lanczos-3 are transformed numerically and their negative lobes show as 180° phase. h(t) shows the kernel.
 - **Result:** Y_k = X_k · H_k (amplitudes multiply, phases add), as spectra and as the waveform y(t), with x(t)
   drawn faintly for comparison. The filter's impulse response h(t) is shown too: multiplying spectra is the same
   as circular convolution in time.

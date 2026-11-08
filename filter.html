@@ -64,6 +64,14 @@
       <button data-preset="delay">Delay T/8</button>
       <button data-preset="zerophase" class="quiet">Phase → 0</button>
     </div>
+    <div class="toolbar" id="kernel-presets" role="group" aria-labelledby="kernel-label">
+      <span class="group-label" id="kernel-label">Interpolation kernels</span>
+      <button data-preset="linear">Linear</button>
+      <button data-preset="cubic">Cubic (Catmull-Rom)</button>
+      <button data-preset="gauss">Gaussian</button>
+      <button data-preset="sinc">Sinc (ideal)</button>
+      <button data-preset="lanczos3">Lanczos-3</button>
+    </div>
     <div class="toolbar controls">
       <div class="segmented" role="group" aria-label="Filter shape">
         <button id="shape-ideal" aria-pressed="true">Ideal</button>
@@ -86,6 +94,12 @@
         <p class="note">
           h(t) is the waveform whose spectrum is H. Multiplying spectra is the same as
           circular convolution in time: y(t) = (1/T) ∫ x(τ) h(t − τ) dτ over one period.
+        </p>
+        <p class="note">
+          Interpolation kernels: joining samples with a kernel h is the same as filtering their spectrum by the
+          Fourier transform of h, as in the reconstruction switch on the <a href="index.html">sampling page</a>.
+          Here the samples are Ts = T/(2k₀) apart, so their Nyquist frequency is bin k₀ and h(t) shows the kernel itself.
+          Sharper kernels cut the images above k₀ better, but they ring: their negative lobes show up as 180° phase.
         </p>
       </div>
     </div>

@@ -105,9 +105,59 @@
     delay: () => 1,
   };
 
+  // ---------- interpolation kernels ----------
+  // A kernel κ(x) interpolates samples spaced Ts (x = t/Ts). Its normalised
+  // Fourier transform Ĥ(ν), ν in cycles per sample and Ĥ(0) = 1, is the
+  // filter. Ts = T/(2k₀) puts the kernel's Nyquist frequency ν = 1/2 on bin k₀,
+  // so H_k = Ĥ(k/(2k₀)). All kernels are even, so Ĥ is real: a negative Ĥ is
+  // drawn as gain |Ĥ| with phase 180°.
+
+  const sinc = (x) => (x === 0 ? 1 : Math.sin(Math.PI * x) / (Math.PI * x));
+  const GAUSS_SIGMA = 0.5; // Gaussian σ, in units of Ts
+  const FT_STEPS = 512;    // Simpson intervals per Ts for numerical transforms
+
+  // Keys cubic with a = −1/2 (Catmull-Rom), support |x| < 2.
+  function catmullRom(x) {
+    x = Math.abs(x);
+    if (x < 1) return (1.5 * x - 2.5) * x * x + 1;
+    if (x < 2) return ((-0.5 * x + 2.5) * x - 4) * x + 2;
+    return 0;
+  }
+  // Windowed sinc: sinc(x)·sinc(x/3), support |x| < 3.
+  const lanczos3 = (x) => (Math.abs(x) < 3 ? sinc(x) * sinc(x / 3) : 0);
+
+  // Ĥ(ν) = 2 ∫₀^support κ(x) cos(2πνx) dx by Simpson's rule, then scaled so Ĥ(0) = 1.
+  function numericFT(kern, support) {
+    const n = support * FT_STEPS, dx = support / n;
+    const raw = (nu) => {
+      const w = 2 * Math.PI * nu * dx;
+      let s = kern(0) + kern(support) * Math.cos(w * n);
+      for (let i = 1; i < n; i++) s += (i % 2 ? 4 : 2) * kern(i * dx) * Math.cos(w * i);
+      return 2 * s * dx / 3;
+    };
+    const dc = raw(0);
+    return (nu) => raw(nu) / dc;
+  }
+
+  const kernels = {
+    linear: (nu) => sinc(nu) ** 2,                                  // triangle
+    cubic: numericFT(catmullRom, 2),
+    gauss: (nu) => Math.exp(-2 * (Math.PI * GAUSS_SIGMA * nu) ** 2), // e^{−x²/2σ²}
+    sinc: (nu) => (nu < 0.5 ? 1 : nu === 0.5 ? 0.5 : 0),            // rect
+    lanczos3: numericFT(lanczos3, 3),
+  };
+
   function applyFilterPreset(name) {
+    const kern = kernels[name];
     const g = filterGains[name];
     for (let k = 0; k < NB; k++) {
+      if (kern) {
+        let v = kern(k / (2 * filterCtl.k0));
+        if (Math.abs(v) < 1e-12) v = 0;
+        state.hA[k] = Math.abs(v);
+        state.hP[k] = v < 0 ? 180 : 0;
+        continue;
+      }
       state.hA[k] = g(k, filterCtl);
       // A delay of T/8 is a linear phase −2π k/8.
       state.hP[k] = name === 'delay' ? wrapDeg(-360 * k / 8) : 0;
@@ -443,10 +493,13 @@
   }
 
   function markFilterPreset() {
-    for (const b of document.querySelectorAll('#filter-presets button')) {
+    for (const b of document.querySelectorAll('#filter-presets button, #kernel-presets button')) {
       b.classList.toggle('active', !filterCtl.drawn && b.dataset.preset === filterCtl.preset);
     }
-    $('filter-status').textContent = filterCtl.drawn ? 'hand-drawn: pick a preset to use the controls again' : '';
+    const ts = `Ts = T/${2 * filterCtl.k0}, kernel Nyquist at k₀`;
+    $('filter-status').textContent = filterCtl.drawn ? 'hand-drawn: pick a preset to use the controls again'
+      : filterCtl.preset === 'gauss' ? `${ts}, σ = Ts/2`
+      : kernels[filterCtl.preset] ? ts : '';
   }
 
   function setInputPreset(name) {
@@ -458,8 +511,8 @@
 
   function setFilterPreset(name) {
     if (name === 'zerophase') {
+      if (state.hP.some((p) => p !== 0)) filterCtl.drawn = true;
       state.hP.fill(0);
-      if (filterCtl.preset === 'delay') filterCtl.drawn = true;
     } else {
       applyFilterPreset(name);
     }
@@ -471,10 +524,12 @@
     const b = e.target.closest('button[data-preset]');
     if (b) setInputPreset(b.dataset.preset);
   });
-  $('filter-presets').addEventListener('click', (e) => {
-    const b = e.target.closest('button[data-preset]');
-    if (b) setFilterPreset(b.dataset.preset);
-  });
+  for (const id of ['filter-presets', 'kernel-presets']) {
+    $(id).addEventListener('click', (e) => {
+      const b = e.target.closest('button[data-preset]');
+      if (b) setFilterPreset(b.dataset.preset);
+    });
+  }
 
   function reapplyFilter() {
     if (!filterCtl.drawn) { applyFilterPreset(filterCtl.preset); markFilterPreset(); recompute(); }
@@ -513,5 +568,5 @@
   recompute();
 
   // Handle for poking at the state from the console.
-  window.filterDemo = { K, state, waves, setInputPreset, setFilterPreset, setShape, filterCtl };
+  window.filterDemo = { K, state, waves, setInputPreset, setFilterPreset, setShape, filterCtl, kernels, catmullRom, lanczos3 };
 })();
