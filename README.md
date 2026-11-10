@@ -126,11 +126,24 @@ single line drawn by two chains of rotating circles, and then by two cams.
   1/5/20/100/all, optional "link X and Y"). Fewer X circles make the drawing coarse horizontally while Y stays
   exact; the unused harmonics are dimmed in each spectrum. Also: speed, pause, reset trail, show circles.
 - **Cam mechanism:** the last section swaps the circles for one cam per axis, with the same circle counts. The cam
-  outline is r(θ) = R_base + x(θ) − min x, so a follower sliding on it moves exactly like the X (or Y) series; the
-  two followers drive a cross-slide whose crossing is the pen. A knife-edge follower is exact; a roller follower
-  (radius slider) rides the inward offset of the outline. The page shows the maximum pressure angle
-  (tan φ = r′/r) and marks undercut in red (convex pitch curve with radius of curvature below the roller radius).
-  With many harmonics the cam is very wiggly and cannot be made for a roller; real harmonic machines (Kelvin's
+  outline is r(θ) = R_base + x(θ) − min x, so a follower sliding on it moves exactly like the X (or Y) series. There
+  is no lever: each follower drives its bar (the X bar vertical, the Y bar horizontal) directly, so bar travel =
+  follower travel = pen travel, 1:1. The whole section (cams, followers, bars, drawing) is drawn at one scale, so the
+  drawing is smaller than in the circles section; that is the real mechanism. A knife-edge follower is exact; a roller
+  follower (radius slider, mm) rides the inward offset of the outline. The page shows the maximum pressure angle
+  (tan φ = r′/r, with the true radius) and marks undercut in red (convex pitch curve with radius of curvature below the
+  roller radius).
+- **Physical size:** "drawing width" (20–200 mm, default 60) sets the mm per image pixel; "base radius" (default 25 mm)
+  is R_base. The page shows the follower lift and both cam outer diameters in mm. Both cams use the same scale.
+- **Download STL:** one binary STL per cam (`cam-x.stl`, `cam-y.stl`, or both), in mm, z up, a closed watertight solid:
+  the outline (the pitch curve, or the roller profile) extruded by the thickness (default 5 mm) around a centre bore
+  (default 5 mm), built as an annulus at matching angle samples (N samples, so 8N triangles). Refused with a message when
+  the roller profile has undercut (it self-intersects) or when the wall around the bore would be under 1.5 mm. The file
+  is made in the browser with Blob and an `<a download>` link; it works from disk and from GitHub Pages.
+- **Timing:** with "D-bore" on (default) the bore has a flat at θ = 0. At the start of the lap the flat faces that cam's
+  follower (X follower on the right of its cam, Y follower below its cam), so mount both cams with the flat in the
+  same relation to its follower and they are in phase. Seen from the top face (+z) each cam turns anticlockwise.
+  With a larger lift the cams get big (outer diameter of about 2 × (R_base + lift)); real harmonic machines (Kelvin's
   tide predictor) use one simple cam or crank per harmonic instead. That one-cam-per-harmonic view is not
   implemented.
 
