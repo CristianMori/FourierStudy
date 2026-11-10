@@ -137,7 +137,7 @@ single line drawn by two chains of rotating circles, and then by two cams.
   (tan φ = r′/r, with the true radius) and marks undercut in red (convex pitch curve with radius of curvature below the
   roller radius).
 - **Z cam (pen lift):** a third cam on the same shaft timing (same θ, same D-bore flat at θ = 0, same direction) stores
-  z(t). Its outline is r(θ) = R_z + h·z̃(θ), with lift h (default 3 mm), base radius R_z (default 20 mm) and z̃ the
+  z(t). Its outline is r(θ) = R_z + h·z̃(θ), with lift h (default 1 mm), base radius R_z (default auto) and z̃ the
   signal with its steps replaced by cycloidal ramps, z̃(u) = u − sin(2πu)/2π, because a cam cannot step. The ramps lie
   inside the bridges: a rise starts on the last stroke sample before a bridge and the fall ends on the first stroke sample
   after it, so every stroke sample is at z̃ = 0 (pen down). Ramp width is the larger of the "ramp" control (default 10°)
@@ -145,8 +145,12 @@ single line drawn by two chains of rotating circles, and then by two cams.
   too short for two such ramps gets all of its span and the largest lift that keeps the pressure angle in range; a lift
   under 10 % of h is dropped and the pen draws that short bridge. The page reports how many bridges were lifted fully,
   reduced or left down, and the Z cam's pressure angle and undercut, like X and Y. A side-view gauge beside the Z cam shows
-  the pen tip over the paper moving with the Z follower (a scale of 0…h mm). With the defaults most bridges are short, so
-  about half get a reduced lift and half stay down; a larger Z base radius or a smaller lift lifts more of them.
+  the pen tip over the paper moving with the Z follower (a scale of 0…h mm). **Auto base radius** (the default; the "auto"
+  button returns to it after moving the slider) is the smallest whole mm, from 8 up to a cap of 80 mm, at which even the
+  shortest bridge gets the full lift within the 30° limit. With a roller follower the ramp width also keeps the pitch
+  curve's radius of curvature at or above the roller radius, so the Z cam is not undercut whenever that can be met. If the
+  cap is reached the page says how many bridges are still reduced or left down (on the sample: 3 of 16 with a knife-edge
+  follower and 11 of 16 with the 4 mm roller, whose short bridges would need a 114 or 163 mm base radius).
 - **Physical size:** "drawing width" (20–200 mm, default 60) sets the mm per image pixel; "base radius" (default 25 mm)
   is R_base. The page shows the follower lift and both cam outer diameters in mm. Both cams use the same scale.
 - **Download STL:** one binary STL per cam (`cam-x.stl`, `cam-y.stl`, `cam-z.stl`, or all three), in mm, z up, a closed watertight solid:

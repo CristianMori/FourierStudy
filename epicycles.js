@@ -17,7 +17,7 @@ const S = {
   skeleton: null, strokes: [], path: null, sig: null, ax: null, ay: null,
   N: 1024, fx: 1, fy: 1, Mx: 1, My: 1,
   t: 0, playing: true, speed: 1,
-  prev: null, cprev: null, cam: null, follower: 'knife', rho: 4, wmm: 60, rbmm: 25, hmm: 3, rampdeg: 10, rzmm: 20, thmm: 5, boremm: 5, dbore: true, camLay: null, fps: 0, frameMs: 0, drawMs: 0,
+  prev: null, cprev: null, cam: null, follower: 'knife', rho: 4, wmm: 60, rbmm: 25, hmm: 1, rampdeg: 10, rzmm: 20, rzAuto: true, thmm: 5, boremm: 5, dbore: true, camLay: null, fps: 0, frameMs: 0, drawMs: 0,
   dirty: 0, theme: null, layout: null, stats: {},
 };
 
@@ -869,42 +869,102 @@ const TINY = 0.1;
 const ZRES = 4096;
 const cyc = u => u - Math.sin(TAU * u) / TAU;
 
-function buildZ() {
-  const b = S.sig.b, N = S.N, NZ = Math.max(N, ZRES), f = NZ / N;
-  const h = S.hmm, R = S.rzmm, tanP = Math.tan(PA_DESIGN * Math.PI / 180), ramp = S.rampdeg * Math.PI / 180;
-  const G = 128, cz = new Float64Array(G + 1), cc = new Float64Array(G + 1);
-  for (let i = 0; i <= G; i++) { cz[i] = cyc(i / G); cc[i] = 1 - Math.cos(TAU * i / G); }
-  // smallest ramp width (rad) that keeps the pressure angle within PA_DESIGN for lift L
-  const need = L => { let m = 0; for (let i = 0; i <= G; i++) m = Math.max(m, cc[i] / (R + L * cz[i])); return L * m / tanP; };
-  const ztil = new Float64Array(NZ);
-  const info = { N, NZ, bridges: 0, full: 0, reduced: 0, down: 0, narrowed: 0, betaMin: Infinity, betaMax: 0, betaP: h > 0 ? need(h) : 0, up: 0 };
-  const s0 = b.indexOf(0);
-  if (h > 0 && s0 >= 0) {
-    let a = -1;
-    for (let k = 0; k <= N; k++) {
-      const bi = k < N ? b[(s0 + k) % N] : 0;
-      if (bi && a < 0) a = k;
-      else if (!bi && a >= 0) {
-        const m = k - a, A = (m + 1) * TAU / N, start = ((s0 + a - 1) % N) * f;
-        a = -1; info.bridges++; info.up += m;
-        const bm = A / 2, want = Math.max(ramp, info.betaP);
-        let lift = h, beta = Math.min(want, bm);
-        if (info.betaP > bm) {
-          let lo = 0, hi = h;
-          for (let it = 0; it < 18; it++) { const mid = (lo + hi) / 2; if (need(mid) <= bm) lo = mid; else hi = mid; }
-          lift = lo; beta = bm;
-        } else if (want > bm) info.narrowed++;
-        if (lift < TINY * h) { info.down++; continue; }
-        if (lift < h) info.reduced++; else info.full++;
-        info.betaMin = Math.min(info.betaMin, beta); info.betaMax = Math.max(info.betaMax, beta);
-        for (let j = 0; j <= (m + 1) * f; j++) {
-          const sa = j * TAU / NZ;
-          ztil[(start + j) % NZ] = (sa < beta ? cyc(sa / beta) : sa > A - beta ? cyc((A - sa) / beta) : 1) * lift / h;
-        }
+const RZ_MIN = 8, RZ_CAP = 80;     // auto base radius search range, mm (the slider's minimum, and the cap)
+const RHO_MARGIN = 1.03;          // roller clearance kept in the curvature rule, so finite differences on the profile agree
+
+// runs of bridge samples (between two stroke samples): m samples, and the rise starts on stroke sample `start`
+function zRuns(b, N) {
+  const runs = [], s0 = b.indexOf(0);
+  if (s0 < 0) return runs;
+  let a = -1;
+  for (let k = 0; k <= N; k++) {
+    const bi = k < N ? b[(s0 + k) % N] : 0;
+    if (bi && a < 0) a = k;
+    else if (!bi && a >= 0) { runs.push({ m: k - a, start: (s0 + a - 1) % N }); a = -1; }
+  }
+  return runs;
+}
+
+// Ramp-width rule for lift L at base radius R (mm): the smallest β (rad) that keeps the pressure angle within PA_DESIGN and,
+// with a roller of radius ρ, keeps the pitch curve's radius of curvature at or above ρ wherever it is convex.
+// Curvature of r(θ) = R + L z~(u), u = θ/β:  κ = (r² + 2r'² − r r'') / (r² + r'²)^{3/2},  r' = L (1 − cos 2πu)/β,  r'' = 2π L sin 2πu / β².
+const zTab = (() => {
+  const G = 128, cz = new Float64Array(G + 1), cc = new Float64Array(G + 1), cs = new Float64Array(G + 1);
+  for (let i = 0; i <= G; i++) { cz[i] = cyc(i / G); cc[i] = 1 - Math.cos(TAU * i / G); cs[i] = Math.sin(TAU * i / G); }
+  return { G, cz, cc, cs };
+})();
+function zNeed(L, R, rho) {
+  const { G, cz, cc, cs } = zTab, tanP = Math.tan(PA_DESIGN * Math.PI / 180);
+  let m = 0;
+  for (let i = 0; i <= G; i++) m = Math.max(m, cc[i] / (R + L * cz[i]));
+  let beta = L * m / tanP;
+  if (rho > 0) {
+    const kmax = beta0 => {
+      let k = 0;
+      for (let i = 0; i <= G; i++) {
+        const r = R + L * cz[i], d1 = L * cc[i] / beta0, d2 = TAU * L * cs[i] / (beta0 * beta0);
+        k = Math.max(k, (r * r + 2 * d1 * d1 - r * d2) / Math.pow(r * r + d1 * d1, 1.5));
       }
+      return k;
+    };
+    const target = 1 / (rho * RHO_MARGIN);
+    if (kmax(Math.PI) > target) return Infinity;        // even a very wide ramp: the base circle is below the roller radius
+    if (kmax(beta) > target) {
+      let lo = beta, hi = Math.PI;
+      for (let it = 0; it < 30; it++) { const mid = (lo + hi) / 2; if (kmax(mid) > target) lo = mid; else hi = mid; }
+      beta = hi;
+    }
+  }
+  return beta;
+}
+
+// Lay the ramps for lift h and base radius R over the bridge runs. Fills ztil (z~ in 0..1) and counts what each bridge got.
+function zPlan(runs, N, h, R, rho) {
+  const NZ = Math.max(N, ZRES), f = NZ / N, ramp = S.rampdeg * Math.PI / 180;
+  const ztil = new Float64Array(NZ);
+  const info = { N, NZ, bridges: runs.length, full: 0, reduced: 0, down: 0, narrowed: 0, betaMin: Infinity, betaMax: 0, betaP: h > 0 ? zNeed(h, R, rho) : 0, up: 0 };
+  const memo = new Map();
+  for (const run of runs) {
+    const m = run.m, A = (m + 1) * TAU / N, bm = A / 2;
+    info.up += m;
+    if (!(h > 0)) continue;
+    let r = memo.get(m);
+    if (!r) {
+      const want = Math.max(ramp, info.betaP);
+      let lift = h, beta = Math.min(want, bm), narrowed = false;
+      if (info.betaP > bm) {
+        let lo = 0, hi = h;
+        for (let it = 0; it < 18; it++) { const mid = (lo + hi) / 2; if (zNeed(mid, R, rho) <= bm) lo = mid; else hi = mid; }
+        lift = lo; beta = bm;
+      } else narrowed = want > bm;
+      r = { lift, beta, narrowed }; memo.set(m, r);
+    }
+    if (r.lift < TINY * h) { info.down++; continue; }
+    if (r.lift < h) info.reduced++; else info.full++;
+    if (r.narrowed) info.narrowed++;
+    info.betaMin = Math.min(info.betaMin, r.beta); info.betaMax = Math.max(info.betaMax, r.beta);
+    const start = run.start * f;
+    for (let j = 0; j <= (m + 1) * f; j++) {
+      const sa = j * TAU / NZ;
+      ztil[(start + j) % NZ] = (sa < r.beta ? cyc(sa / r.beta) : sa > A - r.beta ? cyc((A - sa) / r.beta) : 1) * r.lift / h;
     }
   }
   return { NZ, f, N, ztil, h, R, info };
+}
+
+// Z base radius: with auto on, the smallest whole mm (RZ_MIN..RZ_CAP) at which even the shortest bridge gets the full lift.
+function buildZ() {
+  const N = S.N, runs = zRuns(S.sig.b, N), rho = S.follower === 'roller' ? S.rho : 0, h = S.hmm;
+  let auto = null;
+  if (S.rzAuto) {
+    let R = RZ_MIN;
+    const bmMin = runs.reduce((a, r) => Math.min(a, (r.m + 1) * Math.PI / N), Infinity);
+    if (h > 0 && runs.length) while (R < RZ_CAP && !(zNeed(h, R, rho) <= bmMin)) R++;
+    S.rzmm = R; auto = { R, capped: R === RZ_CAP && h > 0 && runs.length > 0 && !(zNeed(h, R, rho) <= bmMin) };
+  }
+  const zc = zPlan(runs, N, h, S.rzmm, rho);
+  zc.auto = auto;
+  return zc;
 }
 
 // pen elevation as a fraction of the lift, z~, at lap fraction t (linear between the ZRES profile samples)
@@ -925,11 +985,19 @@ function zSamples() {
 // radius and the lifts are all kept in image pixels; the mm values only matter for the sizes shown and for the STL files.
 function mmPerPx() { return S.wmm / S.w; }
 
+function syncRz() {
+  $('p-rbz').value = S.rzmm;
+  $('o-rbz').textContent = S.rzAuto ? 'auto (' + S.rzmm + ' mm)' : S.rzmm + ' mm';
+  $('b-rz-auto').setAttribute('aria-pressed', String(S.rzAuto));
+}
+
 function buildCams() {
   if (!S.partX || !S.w) { S.cam = null; return; }
   const roller = S.follower === 'roller', mpp = mmPerPx();
   const Rb = S.rbmm / mpp, rho = S.rho / mpp;
-  const zc = buildZ(), hpx = S.hmm / mpp, part = new Float64Array(zc.NZ);
+  const zc = buildZ();
+  syncRz(zc);
+  const hpx = S.hmm / mpp, part = new Float64Array(zc.NZ);
   for (let i = 0; i < zc.NZ; i++) part[i] = zc.ztil[i] * hpx;
   S.cam = { x: camProfile(S.partX, rho, roller, Rb), y: camProfile(S.partY, rho, roller, Rb), z: camProfile(part, rho, roller, S.rzmm / mpp), zc, roller, mpp };
   const cx = S.cam.x, cy = S.cam.y, cz = S.cam.z;
@@ -951,7 +1019,10 @@ function buildCams() {
     'Pen lift: ' + zi.bridges + ' bridges. ' + zi.full + ' lifted the full ' + fmt(S.hmm, 1) + ' mm' + (zi.narrowed ? ' (' + zi.narrowed + ' of them with ramps narrower than asked)' : '') + ', ' +
     zi.reduced + ' with a reduced lift (too short for two ramps at the pressure limit), ' + zi.down + ' left down (lift under ' + Math.round(TINY * 100) + '% of ' + fmt(S.hmm, 1) +
     ' mm, so the pen draws that bridge). ' + (zi.betaMax ? 'Ramps ' + deg(zi.betaMin) + ' to ' + deg(zi.betaMax) + ' wide; ' : '') + 'a ' + fmt(S.hmm, 1) +
-    ' mm rise needs ' + deg(zi.betaP) + ' to stay under 30° at this radius.';
+    ' mm rise needs ' + deg(zi.betaP) + ' to stay under 30° at this radius' + (S.follower === 'roller' ? ' and to keep the roller on the profile' : '') + '.';
+  if (zc.auto && zi.bridges && S.hmm > 0) $('st-z').textContent += zc.auto.capped ?
+    ' Z base radius (auto) reached its ' + RZ_CAP + ' mm cap: ' + (zi.reduced + zi.down) + ' of ' + zi.bridges + ' bridges are still reduced or left down.' :
+    ' Z base radius (auto): ' + zc.auto.R + ' mm is the smallest at which every bridge gets the full lift.';
   layoutCam();
 }
 
@@ -1330,7 +1401,9 @@ function init() {
   const numz = (id, key, unit) => $(id).addEventListener('input', () => {
     S[key] = +$(id).value; $('o' + id.slice(1)).textContent = S[key] + unit; buildCams(); resetTrail(); drawSignals(); requestDraw();
   });
-  numz('p-lift', 'hmm', ' mm'); numz('p-ramp', 'rampdeg', '°'); numz('p-rbz', 'rzmm', ' mm');
+  numz('p-lift', 'hmm', ' mm'); numz('p-ramp', 'rampdeg', '°');
+  $('p-rbz').addEventListener('input', () => { S.rzAuto = false; S.rzmm = +$('p-rbz').value; buildCams(); resetTrail(); drawSignals(); requestDraw(); });
+  $('b-rz-auto').addEventListener('click', () => { S.rzAuto = true; buildCams(); resetTrail(); drawSignals(); requestDraw(); });
   $('c-dbore').addEventListener('change', () => { S.dbore = $('c-dbore').checked; requestDraw(); });
   $('b-stl-x').addEventListener('click', () => exportStl(['x']));
   $('b-stl-y').addEventListener('click', () => exportStl(['y']));
@@ -1372,6 +1445,6 @@ function redrawAll() {
   drawStage(); drawCam();
 }
 
-window.epicycles = { drawCam, zAt, penDown, ZEPS, buildZ, S, buildStl, buildCams, camAt, mmPerPx, camPen, chainTip, penAt, analyse, fft, resample, connect, partialSignal, loadFile, flush, drawStage };
+window.epicycles = { zNeed, drawCam, zAt, penDown, ZEPS, buildZ, S, buildStl, buildCams, camAt, mmPerPx, camPen, chainTip, penAt, analyse, fft, resample, connect, partialSignal, loadFile, flush, drawStage };
 init();
 })();
