@@ -17,7 +17,7 @@ const S = {
   skeleton: null, strokes: [], path: null, sig: null, ax: null, ay: null,
   N: 1024, fx: 1, fy: 1, Mx: 1, My: 1,
   t: 0, playing: true, speed: 1,
-  prev: null, cprev: null, cam: null, follower: 'knife', rho: 10, fps: 0, frameMs: 0, drawMs: 0,
+  prev: null, cprev: null, cam: null, follower: 'knife', rho: 4, wmm: 60, rbmm: 25, thmm: 5, boremm: 5, dbore: true, camLay: null, fps: 0, frameMs: 0, drawMs: 0,
   dirty: 0, theme: null, layout: null, stats: {},
 };
 
@@ -698,16 +698,14 @@ function layoutStage() {
   const dwMax = W - M0, dhMax = Math.min(dwMax, 640);
   const s = Math.min(dwMax / S.w, dhMax / S.h);
   const dw = S.w * s, dh = S.h * s, H = Math.round(M0 + dh);
-  c.style.height = H + 'px'; $('cam').style.height = H + 'px';
+  c.style.height = H + 'px';
   const dpr = window.devicePixelRatio || 1;
   const pw = Math.round(W * dpr), ph = Math.round(H * dpr);
   const lay = { W, H, M0, s, dw, dh, dpr };
   if (c.width !== pw || c.height !== ph || !S.trail || S.trail.width !== pw || S.trail.height !== ph) {
     c.width = pw; c.height = ph;
     S.trail = document.createElement('canvas'); S.trail.width = pw; S.trail.height = ph;
-    $('cam').width = pw; $('cam').height = ph;
-    S.ctrail = document.createElement('canvas'); S.ctrail.width = pw; S.ctrail.height = ph;
-    S.prev = S.cprev = null;
+    S.prev = null;
   }
   S.layout = lay;
   return lay;
@@ -817,11 +815,11 @@ function drawStage() {
 // same circles as above). Pitch curve r(θ) = Rb + s(θ). A knife-edge follower rides the pitch curve itself; a roller of
 // radius ρ rides the inner offset of it, and the offset has a cusp (undercut) where the pitch curve is convex with
 // radius of curvature below ρ. Pressure angle (radial translating follower): tan φ = r'(θ) / r(θ).
-function camProfile(part, rho, roller) {
+function camProfile(part, rho, roller, Rb) {
   const N = part.length, da = TAU / N;
   let mn = Infinity, mx = -Infinity;
   for (let i = 0; i < N; i++) { mn = Math.min(mn, part[i]); mx = Math.max(mx, part[i]); }
-  const smax = mx - mn, Rb = 0.6 * smax + 10;
+  const smax = mx - mn;
   const sd = new Float64Array(N), r = new Float64Array(N);
   for (let i = 0; i < N; i++) { sd[i] = part[i] - mn; r[i] = Rb + sd[i]; }
   const outline = new Path2D(), pitch = new Path2D(), bad = new Path2D();
@@ -843,90 +841,253 @@ function camProfile(part, rho, roller) {
     if (i) outline.lineTo(x, y); else outline.moveTo(x, y);
   }
   outline.closePath(); pitch.closePath();
+  let rmax = 0; for (let i = 0; i < N; i++) rmax = Math.max(rmax, Math.hypot(px[i], py[i]), r[i]);
   for (let i = 0; i < N; i++) if (uc[i]) {
     const j = (i + 1) % N;
     bad.moveTo(px[i], py[i]); bad.lineTo(px[j], py[j]);
   }
-  return { N, min: mn, s: sd, r, Rb, smax, outline, pitch, bad, px, py, uc, nUc, maxPress: maxPress * 180 / Math.PI };
+  return { N, min: mn, rmax, s: sd, r, Rb, smax, outline, pitch, bad, px, py, uc, nUc, maxPress: maxPress * 180 / Math.PI };
 }
 
+// Physical size: the picture is S.wmm millimetres wide, so one image pixel is mmPerPx() millimetres. Cam radii, the roller
+// radius and the lifts are all kept in image pixels; the mm values only matter for the sizes shown and for the STL files.
+function mmPerPx() { return S.wmm / S.w; }
+
 function buildCams() {
-  if (!S.partX) { S.cam = null; return; }
-  const roller = S.follower === 'roller';
-  S.cam = { x: camProfile(S.partX, S.rho, roller), y: camProfile(S.partY, S.rho, roller), roller };
+  if (!S.partX || !S.w) { S.cam = null; return; }
+  const roller = S.follower === 'roller', mpp = mmPerPx();
+  const Rb = S.rbmm / mpp, rho = S.rho / mpp;
+  S.cam = { x: camProfile(S.partX, rho, roller, Rb), y: camProfile(S.partY, rho, roller, Rb), roller, mpp };
   const cx = S.cam.x, cy = S.cam.y;
   const bad = [];
   if (cx.nUc) bad.push('X');
   if (cy.nUc) bad.push('Y');
   const press = (n, c) => n + ' cam: max pressure angle ' + fmt(c.maxPress, 0) + '°';
   $('st-cam').innerHTML = press('X', cx) + ', ' + press('Y', cy) + (cx.maxPress > 30 || cy.maxPress > 30 ? ' (above about 30° a real follower jams)' : '') + '. ' +
-    (roller ? (bad.length ? '<span class="bad">Undercut on the ' + bad.join(' and ') + ' cam (red): it cannot be made with a roller of radius ' + S.rho + ' px.</span>'
-                          : 'No undercut with a roller of radius ' + S.rho + ' px.')
+    (roller ? (bad.length ? '<span class="bad">Undercut on the ' + bad.join(' and ') + ' cam (red): it cannot be made with a roller of radius ' + S.rho + ' mm.</span>'
+                          : 'No undercut with a roller of radius ' + S.rho + ' mm.')
             : 'Knife-edge follower: exact for any profile.');
+  const dia = c => fmt(2 * c.rmax * mpp, 1);
+  $('st-size').textContent = 'Drawing ' + fmt(S.wmm, 0) + ' × ' + fmt(S.h * mpp, 1) + ' mm; follower lift (= pen travel) X ' + fmt(cx.smax * mpp, 1) +
+    ' mm, Y ' + fmt(cy.smax * mpp, 1) + ' mm. Cam outer diameter: X ' + dia(cx) + ' mm, Y ' + dia(cy) + ' mm (base radius ' + fmt(S.rbmm, 0) + ' mm).';
+  layoutCam();
 }
 
-// pen position read back from the two cam profiles (linear interpolation between the N profile samples)
+// pen position read back from the two cam profiles (linear interpolation between the N profile samples); image pixels
 function camAt(cm, t) {
   const u = t * cm.N, i = Math.floor(u), f = u - i;
   return cm.min + (1 - f) * cm.s[i % cm.N] + f * cm.s[(i + 1) % cm.N];
 }
 function camPen(t) { return [camAt(S.cam.x, t), camAt(S.cam.y, t)]; }
 
-function drawCam() {
-  const lay = S.layout, c = $('cam');
+// One scale k (canvas px per image px) for the whole section: cams, followers, cross-slide and drawing. Positions:
+// X cam top-left, drawing below it, Y cam to the right of both. The follower rod of each cam is a rigid frame (rod, leg, bar)
+// that only translates, so bar travel = follower travel exactly.
+function camExtent(k, cm, w, h) {
+  const gap = 12, pad = 10, a = cm.x, b = cm.y;
+  const RX = (a.Rb + a.smax) * k, RY = (b.Rb + b.smax) * k;
+  const X = { cx: pad + RX, cy: pad + RX };
+  const xrMax = X.cx + RX + a.smax * k + gap;
+  const DL = pad, DT = X.cy + RX + 2 * gap, dw = w * k, dh = h * k;
+  const cxY = Math.max(xrMax, DL + dw) + 2 * gap + RY;
+  const Y = { cx: cxY, cy: pad + RY };
+  const yrMax = Y.cy + RY + b.smax * k + gap;
+  return { gap, pad, RX, RY, X, Y, DL, DT, dw, dh, W: cxY + RY + pad, H: Math.max(DT + dh + pad, yrMax + pad), xLeg: cxY - RY - gap };
+}
+
+function layoutCam() {
+  const c = $('cam'), cm = S.cam;
+  if (!cm || !S.w) return null;
+  const Wa = c.parentElement.clientWidth, Hmax = 720;
+  let lo = 0, hi = 100;
+  for (let i = 0; i < 40; i++) {
+    const k = (lo + hi) / 2, e = camExtent(k, cm, S.w, S.h);
+    if (e.W <= Wa && e.H <= Hmax) lo = k; else hi = k;
+  }
+  const k = lo, e = camExtent(k, cm, S.w, S.h);
+  const dpr = window.devicePixelRatio || 1, H = Math.ceil(e.H);
+  const pw = Math.round(Wa * dpr), ph = Math.round(H * dpr);
+  c.style.height = H + 'px';
+  const lay = Object.assign(e, { k, W: Wa, H, dpr, ox: Math.max(0, (Wa - e.W) / 2) });
+  const old = S.camLay;
+  if (c.width !== pw || c.height !== ph || !S.ctrail || !old || Math.abs(old.k - k) > 1e-9) {
+    c.width = pw; c.height = ph;
+    S.ctrail = document.createElement('canvas'); S.ctrail.width = pw; S.ctrail.height = ph;
+    S.cprev = null;
+  }
+  S.camLay = lay;
+  return lay;
+}
+
+function stepCamTrail(pen, t) {
+  const lay = S.camLay;
   if (!lay) return;
-  const g = c.getContext('2d'), th = S.theme, cm = S.cam;
+  const g = S.ctrail.getContext('2d');
+  g.setTransform(lay.dpr, 0, 0, lay.dpr, 0, 0);
+  const sx = lay.ox + lay.DL + pen[0] * lay.k, sy = lay.DT + pen[1] * lay.k, prev = S.cprev;
+  if (prev) {
+    const bridge = S.sig.b[Math.floor(t * S.N + 0.5) % S.N] === 1;
+    if (!(bridge && $('c-penup').checked)) {
+      g.beginPath(); g.moveTo(prev[0], prev[1]); g.lineTo(sx, sy);
+      g.strokeStyle = S.theme.pen; g.globalAlpha = bridge ? 0.45 : 1; g.lineWidth = bridge ? 1 : 2; g.lineCap = 'round'; g.stroke();
+      g.globalAlpha = 1;
+    }
+  }
+  S.cprev = [sx, sy];
+}
+
+// bore radius at profile angle a: a circle, with a flat at x = 0.8 r on the θ = 0 side when D-bore is on
+function boreRadius(a, rb, dbore) {
+  const c = Math.cos(a);
+  return dbore && c > 0 ? Math.min(rb, 0.8 * rb / c) : rb;
+}
+
+function drawCam() {
+  const lay = S.camLay, c = $('cam');
+  if (!lay || !S.cam) return;
+  const g = c.getContext('2d'), th = S.theme, cm = S.cam, k = lay.k;
   g.setTransform(lay.dpr, 0, 0, lay.dpr, 0, 0);
   g.clearRect(0, 0, lay.W, lay.H);
-  const { M0, s: sc, dw, dh, W, H } = lay;
-  g.strokeStyle = th.line; g.lineWidth = 1; g.strokeRect(M0 + 0.5, M0 + 0.5, dw - 1, dh - 1);
-  if (!cm) { emptyMsg(g, W, H, 'nothing to draw yet: no closed path'); return; }
-  g.drawImage(S.ctrail, 0, 0, W, H);
-  const th2 = TAU * S.t, rodEnd = 0.47 * M0;
+  g.drawImage(S.ctrail, 0, 0, lay.W, lay.H);
+  g.save(); g.translate(lay.ox, 0);
+  g.strokeStyle = th.line; g.lineWidth = 1; g.strokeRect(lay.DL + 0.5, lay.DT + 0.5, lay.dw - 1, lay.dh - 1);
+  const th2 = TAU * S.t, mpp = cm.mpp, rbore = S.boremm / 2 / mpp;
   const [px, py] = camPen(S.t);
-  const pen = [M0 + px * sc, M0 + py * sc];
-  const one = (c1, cx, cy, psi, colour) => {
-    const cs = 0.42 * M0 / (c1.Rb + c1.smax);
-    const rc = c1.Rb + camAt({ N: c1.N, min: 0, s: c1.s }, S.t);        // pitch radius under the follower
+  const pen = [lay.DL + px * k, lay.DT + py * k];
+  const camBody = (c1, cx, cy, psi, colour) => {
     g.save();
-    g.translate(cx, cy); g.rotate(psi - th2); g.scale(cs, cs);
-    g.lineJoin = 'round'; g.lineWidth = 1.6 / cs; g.strokeStyle = colour;
+    g.translate(cx, cy); g.rotate(psi - th2); g.scale(k, k);
+    g.lineJoin = 'round'; g.lineWidth = 1.6 / k; g.strokeStyle = colour;
     g.globalAlpha = 0.1; g.fillStyle = colour; g.fill(c1.outline); g.globalAlpha = 1;
     g.stroke(c1.outline);
     if (cm.roller) {
-      g.globalAlpha = 0.5; g.lineWidth = 1 / cs; g.setLineDash([4 / cs, 3 / cs]); g.stroke(c1.pitch); g.setLineDash([]); g.globalAlpha = 1;
-      g.lineWidth = 2.6 / cs; g.strokeStyle = th.bad; g.stroke(c1.bad);
+      g.globalAlpha = 0.5; g.lineWidth = 1 / k; g.setLineDash([4 / k, 3 / k]); g.stroke(c1.pitch); g.setLineDash([]); g.globalAlpha = 1;
+      g.lineWidth = 2.6 / k; g.strokeStyle = th.bad; g.stroke(c1.bad);
     }
-    g.lineWidth = 1 / cs; g.strokeStyle = th.muted;                      // a mark on the cam so its turning shows
-    g.beginPath(); g.moveTo(0, 0); g.lineTo(c1.Rb * 0.35, 0); g.stroke();
+    g.lineWidth = 1 / k; g.strokeStyle = th.muted;                       // bore (with its flat at θ = 0) and the θ = 0 mark
+    g.beginPath();
+    for (let i = 0; i <= 48; i++) { const a = i * TAU / 48, r = boreRadius(a, rbore, S.dbore); i ? g.lineTo(r * Math.cos(a), r * Math.sin(a)) : g.moveTo(r, 0); }
+    g.stroke();
+    g.beginPath(); g.moveTo(rbore * 1.4, 0); g.lineTo(c1.Rb * 0.8, 0); g.stroke();
     g.restore();
-    g.fillStyle = th.ink; g.beginPath(); g.arc(cx, cy, 2.5, 0, TAU); g.fill();
-    const ux = Math.cos(psi), uy = Math.sin(psi);
-    const tx = cx + ux * cs * rc, ty = cy + uy * cs * rc;                // follower tip (knife) or roller centre
-    g.strokeStyle = th.ink; g.lineWidth = 2; g.beginPath(); g.moveTo(tx, ty); g.lineTo(cx + ux * rodEnd, cy + uy * rodEnd); g.stroke();
-    if (cm.roller) { g.beginPath(); g.arc(tx, ty, S.rho * cs, 0, TAU); g.fillStyle = th.panel; g.fill(); g.stroke(); }
-    else { g.fillStyle = th.ink; g.beginPath(); g.arc(tx, ty, 3, 0, TAU); g.fill(); }
-    g.fillStyle = th.ink; g.fillRect(cx + ux * rodEnd - 3, cy + uy * rodEnd - 3, 6, 6);
-    return [cx + ux * rodEnd, cy + uy * rodEnd, cs];
   };
-  // X cam above the picture, follower sliding horizontally; Y cam left of it, follower sliding vertically
-  const ex = one(cm.x, M0 + dw / 2, M0 / 2, 0, th.x);
-  const ey = one(cm.y, M0 / 2, M0 + dh / 2, Math.PI / 2, th.y);
-  // lever from follower to slide bar (the cams are drawn smaller than the picture, so the motion is magnified)
-  g.save(); g.setLineDash([4, 3]); g.lineWidth = 1;
-  g.strokeStyle = th.x; g.beginPath(); g.moveTo(ex[0], ex[1]); g.lineTo(pen[0], ex[1]); g.stroke();
-  g.strokeStyle = th.y; g.beginPath(); g.moveTo(ey[0], ey[1]); g.lineTo(ey[0], pen[1]); g.stroke();
-  g.restore();
-  // cross-slide: the X bar is vertical and slides sideways, the Y bar is horizontal and slides up and down
-  g.lineWidth = 3; g.lineCap = 'round';
-  g.strokeStyle = th.x; g.beginPath(); g.moveTo(pen[0], ex[1]); g.lineTo(pen[0], pen[1]); g.stroke();
-  g.strokeStyle = th.y; g.beginPath(); g.moveTo(ey[0], pen[1]); g.lineTo(pen[0], pen[1]); g.stroke();
+  g.lineJoin = 'round'; g.lineCap = 'round';
+  // X: cam top-left, follower on its right; rod → leg down → arm → the vertical bar down to the pen
+  const A = cm.x, X = lay.X, sx = camAt({ N: A.N, min: 0, s: A.s }, S.t);
+  camBody(A, X.cx, X.cy, 0, th.x);
+  const tipX = [X.cx + (A.Rb + sx) * k, X.cy], gX = A.smax * k + lay.gap, yLegX = X.cy + lay.RX + lay.gap;
+  const rX = tipX[0] + gX;
+  g.lineWidth = 3; g.strokeStyle = th.x;
+  g.beginPath(); g.moveTo(tipX[0], tipX[1]); g.lineTo(rX, tipX[1]); g.lineTo(rX, yLegX); g.lineTo(pen[0], yLegX); g.lineTo(pen[0], pen[1]); g.stroke();
+  // Y: cam top-right, follower below it; rod → leg left → vertical leg → the horizontal bar left to the pen
+  const B = cm.y, Y = lay.Y, sy = camAt({ N: B.N, min: 0, s: B.s }, S.t);
+  camBody(B, Y.cx, Y.cy, Math.PI / 2, th.y);
+  const tipY = [Y.cx, Y.cy + (B.Rb + sy) * k], gY = B.smax * k + lay.gap, yR = tipY[1] + gY;
+  g.strokeStyle = th.y;
+  g.beginPath(); g.moveTo(tipY[0], tipY[1]); g.lineTo(tipY[0], yR); g.lineTo(lay.xLeg, yR); g.lineTo(lay.xLeg, pen[1]); g.lineTo(pen[0], pen[1]); g.stroke();
   g.lineCap = 'butt';
+  for (const [cx, cy, tip] of [[X.cx, X.cy, tipX], [Y.cx, Y.cy, tipY]]) {
+    g.fillStyle = th.ink; g.beginPath(); g.arc(cx, cy, 2.5, 0, TAU); g.fill();
+    if (cm.roller) { g.lineWidth = 1.6; g.strokeStyle = th.ink; g.beginPath(); g.arc(tip[0], tip[1], S.rho / mpp * k, 0, TAU); g.fillStyle = th.panel; g.fill(); g.stroke(); }
+    else { g.fillStyle = th.ink; g.beginPath(); g.arc(tip[0], tip[1], 3, 0, TAU); g.fill(); }
+  }
   g.fillStyle = th.pen; g.strokeStyle = th.ink; g.lineWidth = 1.2;
   g.beginPath(); g.arc(pen[0], pen[1], 4.5, 0, TAU); g.fill(); g.stroke();
-  g.fillStyle = th.muted; g.font = '11px system-ui, sans-serif';
-  g.fillText('X cam → slide bar → pen x', M0 + 6, 14); g.fillText('Y cam', 6, M0 + 14); g.fillText('→ pen y', 6, M0 + 27);
-  S.camScale = [ex[2], ey[2]];
+  // scale bar
+  const bar = Math.max(1, Math.round(10 / mpp * k));
+  g.strokeStyle = th.muted; g.fillStyle = th.muted; g.lineWidth = 2;
+  g.beginPath(); g.moveTo(lay.DL, lay.H - 8); g.lineTo(lay.DL + bar, lay.H - 8); g.stroke();
+  g.font = '11px system-ui, sans-serif'; g.fillText('10 mm', lay.DL + bar + 6, lay.H - 4);
+  g.fillText('X cam', X.cx - 14, 12); g.fillText('Y cam', Y.cx - 14, 12);
+  g.restore();
+  S.camGeom = { tipX: tipX[0], barX: pen[0], tipY: tipY[1], barY: pen[1], rodX: rX, legY: yR, k };
+}
+
+// ---------- STL export ----------
+// Outline of one cam in mm as polar samples (angle φ in the cam's own frame, as drawn; radius ro): the pitch curve for a
+// knife-edge follower, the roller profile otherwise. Returns {error} when it is not a simple star-shaped outline.
+function camOutline(cm, roller, mpp, name) {
+  const N = cm.N, phi = new Float64Array(N), ro = new Float64Array(N);
+  for (let i = 0; i < N; i++) {
+    if (roller) { phi[i] = Math.atan2(cm.py[i], cm.px[i]); ro[i] = Math.hypot(cm.px[i], cm.py[i]) * mpp; }
+    else { phi[i] = i * TAU / N; ro[i] = cm.r[i] * mpp; }
+  }
+  if (roller) {
+    // a simple star-shaped outline turns monotonically, once round
+    let tot = 0;
+    for (let i = 1; i <= N; i++) {
+      let d = phi[i % N] - phi[i - 1]; while (d < 0) d += TAU; while (d > TAU) d -= TAU;
+      if (d <= 0 || d > Math.PI * 0.99) return { error: name + ' cam: the roller profile folds back on itself (undercut), so it cannot be exported.' };
+      tot += d;
+    }
+    if (Math.abs(tot - TAU) > 1e-6) return { error: name + ' cam: the roller profile does not go once round the shaft (undercut), so it cannot be exported.' };
+  }
+  return { phi, ro, N };
+}
+
+// Binary STL (mm, z up) of one cam: the outline extruded by the thickness, an annulus top and bottom, outer and inner walls.
+// The canvas has y down, so y is flipped: the part seen from +z looks like the drawing, and it turns anticlockwise.
+function buildStl(which) {
+  const cm = S.cam && S.cam[which], name = which.toUpperCase();
+  if (!cm) return { error: 'No cam yet: load an image first.' };
+  const mpp = S.cam.mpp, roller = S.cam.roller;
+  if (roller && cm.nUc) return { error: name + ' cam: undercut with a roller of radius ' + S.rho + ' mm (red in the picture), so it cannot be exported. Use a smaller roller, fewer circles, or knife-edge.' };
+  const o = camOutline(cm, roller, mpp, name);
+  if (o.error) return o;
+  const { phi, ro, N } = o, T = S.thmm, rb = S.boremm / 2, WALL = 1.5;
+  let lo = Infinity, at = 0;
+  for (let i = 0; i < N; i++) if (ro[i] < lo) { lo = ro[i]; at = i; }
+  if (!(lo > rb + WALL)) return { error: name + ' cam: the outline comes down to r = ' + fmt(lo, 2) + ' mm (at θ = ' + fmt(phi[at] * 180 / Math.PI, 0) + '°), which leaves less than ' + WALL +
+    ' mm of wall around the ' + fmt(S.boremm, 1) + ' mm bore. Raise the base radius or reduce the bore.' };
+  const nv = 4 * N, V = new Float32Array(nv * 3);
+  const put = (idx, x, y, z) => { V[3 * idx] = x; V[3 * idx + 1] = y; V[3 * idx + 2] = z; };
+  for (let i = 0; i < N; i++) {                     // ccw seen from +z: sample N-i of the drawn outline, y flipped
+    const q = (N - i) % N, a = phi[q], c = Math.cos(a), s = -Math.sin(a), ri = boreRadius(a, rb, S.dbore);
+    put(i, ro[q] * c, ro[q] * s, T); put(N + i, ri * c, ri * s, T);
+    put(2 * N + i, ro[q] * c, ro[q] * s, 0); put(3 * N + i, ri * c, ri * s, 0);
+  }
+  const tris = [];
+  for (let i = 0; i < N; i++) {
+    const j = (i + 1) % N, Ot = i, Otj = j, It = N + i, Itj = N + j, Ob = 2 * N + i, Obj = 2 * N + j, Ib = 3 * N + i, Ibj = 3 * N + j;
+    tris.push(Ot, Otj, Itj, Ot, Itj, It);          // top, +z
+    tris.push(Ob, Ibj, Obj, Ob, Ib, Ibj);          // bottom, -z
+    tris.push(Ob, Obj, Otj, Ob, Otj, Ot);          // outer wall, outward
+    tris.push(Ib, Itj, Ibj, Ib, It, Itj);          // bore wall, towards the axis
+  }
+  const nt = tris.length / 3, buf = new ArrayBuffer(84 + 50 * nt), dv = new DataView(buf);
+  const head = 'FourierDemo ' + name + ' cam, mm'; for (let i = 0; i < head.length; i++) dv.setUint8(i, head.charCodeAt(i));
+  dv.setUint32(80, nt, true);
+  let off = 84, vol = 0;
+  for (let t = 0; t < nt; t++) {
+    const a = tris[3 * t], b = tris[3 * t + 1], c = tris[3 * t + 2];
+    const A = [V[3 * a], V[3 * a + 1], V[3 * a + 2]], B = [V[3 * b], V[3 * b + 1], V[3 * b + 2]], C = [V[3 * c], V[3 * c + 1], V[3 * c + 2]];
+    const u = [B[0] - A[0], B[1] - A[1], B[2] - A[2]], w = [C[0] - A[0], C[1] - A[1], C[2] - A[2]];
+    let n = [u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]];
+    const l = Math.hypot(n[0], n[1], n[2]) || 1; n = [n[0] / l, n[1] / l, n[2] / l];
+    for (const v of [n, A, B, C]) for (let q = 0; q < 3; q++) { dv.setFloat32(off, v[q], true); off += 4; }
+    dv.setUint16(off, 0, true); off += 2;
+    vol += (A[0] * (B[1] * C[2] - B[2] * C[1]) - A[1] * (B[0] * C[2] - B[2] * C[0]) + A[2] * (B[0] * C[1] - B[1] * C[0])) / 6;
+  }
+  let rmax = 0; for (let i = 0; i < N; i++) rmax = Math.max(rmax, ro[i]);
+  return { buf, triangles: nt, volume: vol, name: 'cam-' + which + '.stl', diameter: 2 * rmax, thickness: T };
+}
+
+function downloadBlob(buf, name) {
+  const url = URL.createObjectURL(new Blob([buf], { type: 'model/stl' }));
+  const a = document.createElement('a'); a.href = url; a.download = name; a.style.display = 'none';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+}
+
+function exportStl(which) {
+  const msgs = [];
+  which.forEach((w, i) => {
+    const r = buildStl(w);
+    if (r.error) { msgs.push('<span class="bad">Not exported: ' + r.error + '</span>'); return; }
+    setTimeout(() => downloadBlob(r.buf, r.name), 350 * i);
+    msgs.push(r.name + ': ' + r.triangles + ' triangles, Ø ' + fmt(r.diameter, 1) + ' × ' + fmt(r.thickness, 1) + ' mm' + (S.dbore ? ', D-bore flat at θ = 0' : ''));
+  });
+  $('st-stl').innerHTML = msgs.join('<br>');
 }
 
 let drawQueued = false;
@@ -947,7 +1108,7 @@ function frame(now) {
       let t = S.t + dT / sub; if (t >= 1) t -= 1; if (t < 0) t += 1;
       S.t = t;
       stepTrail(S.layout, penAt(t, S.Mx, S.My), t);
-      if (S.cam) stepTrail(S.layout, camPen(t), t, true);
+      if (S.cam) stepCamTrail(camPen(t), t);
     }
   }
   if (S.playing || drawQueued) { drawStage(); drawCam(); }
@@ -1068,7 +1229,15 @@ function init() {
     document.querySelectorAll('#follower button').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
     buildCams(); requestDraw();
   }));
-  $('p-rho').addEventListener('input', () => { S.rho = +$('p-rho').value; $('o-rho').textContent = S.rho + ' px'; buildCams(); requestDraw(); });
+  const num = (id, key, rebuild) => $(id).addEventListener('input', () => {
+    S[key] = +$(id).value; $('o' + id.slice(1)).textContent = S[key] + ' mm'; if (rebuild) { buildCams(); resetTrail(); } requestDraw();
+  });
+  num('p-rho', 'rho', true); num('p-wmm', 'wmm', true); num('p-rb', 'rbmm', true);
+  num('p-th', 'thmm'); num('p-bore', 'boremm');
+  $('c-dbore').addEventListener('change', () => { S.dbore = $('c-dbore').checked; requestDraw(); });
+  $('b-stl-x').addEventListener('click', () => exportStl(['x']));
+  $('b-stl-y').addEventListener('click', () => exportStl(['y']));
+  $('b-stl-both').addEventListener('click', () => exportStl(['x', 'y']));
   // X and Y circle counts are independent; "link" makes a change to one move the other
   const setFrac = (axis, f) => {
     f = Math.max(0, Math.min(1, f));
@@ -1092,7 +1261,7 @@ function init() {
   $('c-penup').addEventListener('change', () => { drawStage(); });
 
   let rz = 0;
-  window.addEventListener('resize', () => { cancelAnimationFrame(rz); rz = requestAnimationFrame(() => { layoutViews(); layoutStage(); resetTrail(); redrawAll(); }); });
+  window.addEventListener('resize', () => { cancelAnimationFrame(rz); rz = requestAnimationFrame(() => { layoutViews(); layoutStage(); layoutCam(); resetTrail(); redrawAll(); }); });
   showOutputs();
   useSample();
   requestAnimationFrame(frame);
@@ -1105,6 +1274,6 @@ function redrawAll() {
   drawStage(); drawCam();
 }
 
-window.epicycles = { S, camPen, chainTip, penAt, analyse, fft, resample, connect, partialSignal, loadFile, flush, drawStage };
+window.epicycles = { S, buildStl, buildCams, camAt, mmPerPx, camPen, chainTip, penAt, analyse, fft, resample, connect, partialSignal, loadFile, flush, drawStage };
 init();
 })();
