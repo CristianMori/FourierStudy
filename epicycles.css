@@ -10,6 +10,7 @@
   --btn-hover: #e5e2da;
   --c-x: #2f6fd6;
   --c-y: #c97a10;
+  --c-z: #7b5cd6;
   --c-pen: #17895f;
   --c-bridge: #b0449a;
   --c-ref: #8d8a82;
@@ -30,6 +31,7 @@
     --btn-hover: #323741;
     --c-x: #6b9ef5;
     --c-y: #f0a443;
+    --c-z: #a58cf5;
     --c-pen: #3fc994;
     --c-bridge: #e07ccb;
     --c-ref: #8a909b;
@@ -50,6 +52,7 @@
   --btn-hover: #323741;
   --c-x: #6b9ef5;
   --c-y: #f0a443;
+  --c-z: #a58cf5;
   --c-pen: #3fc994;
   --c-bridge: #e07ccb;
   --c-ref: #8a909b;
@@ -163,6 +166,7 @@ button[aria-pressed="true"] { border-color: var(--c-pen); box-shadow: inset 0 0 
 .views { display: grid; gap: 14px; }
 .views.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .views.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.views.four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .views > div { min-width: 0; }
 
 .plot-label { font-size: 0.82rem; color: var(--muted); margin: 2px 0; }
@@ -179,13 +183,14 @@ button[aria-pressed="true"] { border-color: var(--c-pen); box-shadow: inset 0 0 
 .legend .ln { display: inline-block; width: 18px; height: 0; vertical-align: middle; margin: 0 4px 0 8px; }
 .ln-x { border-top: 2px solid var(--c-x); }
 .ln-y { border-top: 2px solid var(--c-y); }
+.ln-z { border-top: 2px solid var(--c-z); }
 .ln-ap { border-top: 2px dashed var(--c-ref); }
 
 .stage-wrap { width: 100%; }
 #stage, #cam { display: block; width: 100%; height: 600px; border-radius: 6px; background: var(--bg); }
 
 @media (max-width: 760px) {
-  .views.three, .views.two { grid-template-columns: minmax(0, 1fr); }
+  .views.three, .views.two, .views.four { grid-template-columns: minmax(0, 1fr); }
   .view { height: 220px; }
   .view.sig, .view.spec { height: 140px; }
   .view.specp { height: 80px; }
@@ -194,3 +199,5 @@ button[aria-pressed="true"] { border-color: var(--c-pen); box-shadow: inset 0 0 
 
 #st-cam .bad { color: var(--c-bad); }
 #o-mx, #o-my { min-width: 8ch; }
+#st-z, #st-zsw { max-width: 900px; }
+[hidden] { display: none !important; }
