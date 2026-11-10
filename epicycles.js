@@ -17,7 +17,7 @@ const S = {
   skeleton: null, strokes: [], path: null, sig: null, ax: null, ay: null,
   N: 1024, fx: 1, fy: 1, Mx: 1, My: 1,
   t: 0, playing: true, speed: 1,
-  prev: null, cprev: null, cam: null, follower: 'knife', rho: 4, wmm: 60, rbmm: 25, hmm: 1, rampdeg: 10, rzmm: 20, rzAuto: true, thmm: 5, boremm: 5, dbore: true, camLay: null, fps: 0, frameMs: 0, drawMs: 0,
+  prev: null, cprev: null, cam: null, follower: 'knife', rho: 4, wmm: 60, rbmm: 25, hmm: 1, hDirect: 1, hSw: 0.8, zmode: 'direct', pasw: 45, delay: 120, lapsec: 60, rampdeg: 10, rzmm: 20, rzAuto: true, thmm: 5, boremm: 5, dbore: true, camLay: null, fps: 0, frameMs: 0, drawMs: 0,
   dirty: 0, theme: null, layout: null, stats: {},
 };
 
@@ -341,6 +341,8 @@ function resample(path, N) {
   for (let i = 0; i < P; i++) cum[i + 1] = cum[i] + Math.hypot(x[(i + 1) % P] - x[i], y[(i + 1) % P] - y[i]);
   const L = cum[P];
   const sx = new Float64Array(N), sy = new Float64Array(N), sb = new Uint8Array(N);
+  const bnd = [];                    // each bridge as [start, end] in lap fractions, exactly (the samples only show them to within a sample)
+  for (let i = 0; i < P; i++) if (br[i] && cum[i + 1] - cum[i] > 1e-9) bnd.push([cum[i] / L, cum[i + 1] / L]);
   let j = 0;
   for (let n = 0; n < N; n++) {
     const s = n * L / N;
@@ -349,7 +351,7 @@ function resample(path, N) {
     const k = (j + 1) % P;
     sx[n] = x[j] + f * (x[k] - x[j]); sy[n] = y[j] + f * (y[k] - y[j]); sb[n] = br[j];
   }
-  return { N, x: sx, y: sy, b: sb, L };
+  return { N, x: sx, y: sy, b: sb, L, bnd };
 }
 
 // ---------- 5. FFT ----------
@@ -620,10 +622,12 @@ function timePlot(id, sig, part, colour, lab) {
 }
 
 function drawSignals() {
-  if (!S.sig) { for (const id of ['sig-x', 'sig-y', 'sig-z']) { const { g, w, h } = prep($(id)); emptyMsg(g, w, h, 'no signal'); } return; }
+  if (!S.sig) { for (const id of ['sig-x', 'sig-y', 'sig-z', 'sig-sw']) { const { g, w, h } = prep($(id)); emptyMsg(g, w, h, 'no signal'); } return; }
   timePlot('sig-x', S.sig.x, S.partX, S.theme.x);
   timePlot('sig-y', S.sig.y, S.partY, S.theme.y);
-  timePlot('sig-z', S.sig.z, S.cam ? zSamples() : null, S.theme.z, v => (+v.toFixed(2)).toString());
+  const swm = S.cam && S.cam.zc.mode === 'switch';
+  timePlot('sig-z', S.sig.z, S.cam && !swm ? zSamples() : null, S.theme.z, v => (+v.toFixed(2)).toString());
+  if (swm) timePlot('sig-sw', swSamples(), zSamples(), S.theme.z, v => (+v.toFixed(2)).toString());
   $('o-n').textContent = S.N;
   $('st-sig').textContent = S.N + ' samples, closed path length ' + fmt(S.sig.L, 0) + ' px, one sample every ' + fmt(S.sig.L / S.N, 2) + ' px of path.';
 }
@@ -813,6 +817,7 @@ function drawStage() {
   $('cur-x').style.left = 'calc(40px + (100% - 46px) * ' + S.t + ')';
   $('cur-y').style.left = 'calc(40px + (100% - 46px) * ' + S.t + ')';
   $('cur-z').style.left = 'calc(40px + (100% - 46px) * ' + S.t + ')';
+  $('cur-sw').style.left = 'calc(40px + (100% - 46px) * ' + S.t + ')';
 }
 
 // ---------- 7. cams ----------
@@ -864,12 +869,14 @@ function camProfile(part, rho, roller, Rb) {
 // such ramps gets all of its span (β = span/2) and the largest lift that keeps φ in range; a lift below TINY·h is dropped and
 // that bridge is drawn with the pen down. z~ is sampled at ZRES points per lap whatever N is, so the ramps are smooth.
 const PA_DESIGN = 29.7;      // degrees; a little under the 30° limit so the measured value (finite differences) stays below it
+const paDesign = () => S.zmode === 'switch' ? S.pasw * 0.993 : PA_DESIGN;     // a switch needs little force: its own, looser limit
 const ZEPS = 0.02;           // the pen touches the paper while z~ is below this
 const TINY = 0.1;
 const ZRES = 4096;
 const cyc = u => u - Math.sin(TAU * u) / TAU;
 
 const RZ_MIN = 8, RZ_CAP = 80;     // auto base radius search range, mm (the slider's minimum, and the cap)
+const ZTIE = 2e-6;                // rad; 0.0003 of a sample at N = 1024
 const RHO_MARGIN = 1.03;          // roller clearance kept in the curvature rule, so finite differences on the profile agree
 
 // runs of bridge samples (between two stroke samples): m samples, and the rise starts on stroke sample `start`
@@ -894,7 +901,7 @@ const zTab = (() => {
   return { G, cz, cc, cs };
 })();
 function zNeed(L, R, rho) {
-  const { G, cz, cc, cs } = zTab, tanP = Math.tan(PA_DESIGN * Math.PI / 180);
+  const { G, cz, cc, cs } = zTab, tanP = Math.tan(paDesign() * Math.PI / 180);
   let m = 0;
   for (let i = 0; i <= G; i++) m = Math.max(m, cc[i] / (R + L * cz[i]));
   let beta = L * m / tanP;
@@ -953,8 +960,76 @@ function zPlan(runs, N, h, R, rho) {
 }
 
 // Z base radius: with auto on, the smallest whole mm (RZ_MIN..RZ_CAP) at which even the shortest bridge gets the full lift.
+// Switch mode: the cam only trips a switch at half its lift, and a servo lifts the pen. The servo is modelled as a pure dead
+// time `delay` after the switch changes state, i.e. the pen follows the switch state shifted by the lead angle
+// λ = 2π · delay / lap time. The switch command is advanced by λ: its half-lift crossings are put at (bridge start − λ) and
+// (bridge end − λ), using the exact bridge ends, so the pen lifts exactly at the start of the bridge and lands exactly at the
+// next stroke. Each ramp is centred on its crossing (z~ = 1/2 there), with its width limited by the distance to the neighbouring
+// crossings (the bridge, and the stroke between bridges) so ramps never overlap; a stroke that has samples is never lifted. A
+// bridge whose ramps would be narrower than the pressure-angle / roller rule allows is skipped (the pen draws it); the shortest
+// bridge is dropped first and the rest are re-checked.
+// exact start and end (radians) of each run of bridge samples, from the true bridge ends
+function zExact(runs, N) {
+  const bnd = S.sig.bnd || [], dist = (f, b) => f < b[0] ? b[0] - f : f > b[1] ? f - b[1] : 0;
+  const find = f => { let best = null, bd = Infinity; for (const b of bnd) { const d = dist(f, b); if (d < bd) { bd = d; best = b; } } return best; };
+  return runs.map(r => ({ s0: find(((r.start + 1) % N) / N)[0] * TAU, s1: find(((r.start + r.m) % N) / N)[1] * TAU, m: r.m }));
+}
+
+function zPlanSwitch(runs, N, h, R, rho, lead) {
+  const NZ = Math.max(N, ZRES), da = TAU / NZ, ramp = S.rampdeg * Math.PI / 180, ztil = new Float64Array(NZ);
+  let kept = zExact(runs, N);
+  const need = h > 0 ? zNeed(h, R, rho) : 0, info = { N, NZ, mode: 'switch', bridges: runs.length, kept: 0, skipped: 0, narrowed: 0, betaMin: Infinity, betaMax: 0, betaP: need, lead, up: 0 };
+  const lims = () => kept.map((k, i) => {
+    const n = kept.length, len = k.s1 - k.s0;
+    const before = n === 1 ? TAU - len : i ? k.s0 - kept[i - 1].s1 : k.s0 + TAU - kept[n - 1].s1;
+    const after = n === 1 ? TAU - len : i < n - 1 ? kept[i + 1].s0 - k.s1 : kept[0].s0 + TAU - k.s1;
+    return { len, rise: Math.min(len, before), fall: Math.min(len, after) };
+  });
+  if (!(h > 0)) kept = [];
+  for (;;) {
+    const L = lims(); let worst = -1;
+    L.forEach((l, i) => { if (Math.min(l.rise, l.fall) < need * (1 - 1e-9) && (worst < 0 || l.len < L[worst].len)) worst = i; });
+    if (worst < 0) break;
+    kept.splice(worst, 1); info.skipped++;
+  }
+  const L = lims(), want = Math.max(ramp, need);
+  kept.forEach((k, i) => {
+    const br = Math.min(want, L[i].rise), bf = Math.min(want, L[i].fall);
+    if (want > Math.min(L[i].rise, L[i].fall)) info.narrowed++;
+    info.kept++; info.up += k.m;
+    info.betaMin = Math.min(info.betaMin, br, bf); info.betaMax = Math.max(info.betaMax, br, bf);
+    const cr = k.s0 - lead - ZTIE, cf = k.s1 - lead - ZTIE;      // a hair early, so a sample exactly on a bridge end (the lap start) falls on the right side
+    const j0 = Math.ceil((cr - br / 2) / da), j1 = Math.floor((cf + bf / 2) / da);
+    for (let j = j0; j <= j1; j++) {
+      const th = j * da;
+      const v = th <= cr + br / 2 ? cyc((th - (cr - br / 2)) / br) : th < cf - bf / 2 ? 1 : cyc((cf + bf / 2 - th) / bf);
+      ztil[((j % NZ) + NZ) % NZ] = Math.max(0, Math.min(1, v));
+    }
+  });
+  return { NZ, f: NZ / N, N, ztil, h, R, info, lead, kept };
+}
+
 function buildZ() {
   const N = S.N, runs = zRuns(S.sig.b, N), rho = S.follower === 'roller' ? S.rho : 0, h = S.hmm;
+  if (S.zmode === 'switch') {
+    const lead = TAU * (S.delay / 1000) / S.lapsec;
+    let auto = null;
+    if (S.rzAuto) {
+      let R = RZ_MIN, minGap = Infinity;
+      if (runs.length && h > 0) {
+        const kr = zExact(runs, N);
+        kr.forEach((k, i) => {
+          const before = kr.length === 1 ? TAU - (k.s1 - k.s0) : i ? k.s0 - kr[i - 1].s1 : k.s0 + TAU - kr[kr.length - 1].s1;
+          minGap = Math.min(minGap, k.s1 - k.s0, before);
+        });
+        while (R < RZ_CAP && !(zNeed(h, R, rho) <= minGap)) R++;
+      }
+      S.rzmm = R; auto = { R, capped: R === RZ_CAP && h > 0 && runs.length > 0 && !(zNeed(h, R, rho) <= minGap), minGap };
+    }
+    const zc = zPlanSwitch(runs, N, h, S.rzmm, rho, lead);
+    zc.auto = auto; zc.mode = 'switch';
+    return zc;
+  }
   let auto = null;
   if (S.rzAuto) {
     let R = RZ_MIN;
@@ -963,7 +1038,7 @@ function buildZ() {
     S.rzmm = R; auto = { R, capped: R === RZ_CAP && h > 0 && runs.length > 0 && !(zNeed(h, R, rho) <= bmMin) };
   }
   const zc = zPlan(runs, N, h, S.rzmm, rho);
-  zc.auto = auto;
+  zc.auto = auto; zc.mode = 'direct'; zc.lead = 0;
   return zc;
 }
 
@@ -974,7 +1049,20 @@ function zAt(t) {
   const u = (t - Math.floor(t)) * zc.NZ, i = Math.floor(u), q = u - i;
   return (1 - q) * zc.ztil[i % zc.NZ] + q * zc.ztil[(i + 1) % zc.NZ];
 }
-function penDown(t) { return zAt(t) < ZEPS; }
+// the pen: direct mode, down while the cam is below ε; switch mode, the servo pen follows the switch (cam at or above half lift)
+// delayed by the lead angle
+function penUp(t) {
+  const zc = S.cam && S.cam.zc;
+  if (!zc || zc.mode !== 'switch') return zAt(t) >= ZEPS;
+  return zAt(t - zc.lead / TAU) >= 0.5;
+}
+function penDown(t) { return !penUp(t); }
+function swOn(t) { return zAt(t) >= 0.5; }
+function swSamples() {
+  const N = S.N, o = new Float64Array(N);
+  for (let n = 0; n < N; n++) o[n] = swOn(n / N) ? 1 : 0;
+  return o;
+}
 function zSamples() {
   const zc = S.cam.zc, o = new Float64Array(zc.N);
   for (let n = 0; n < zc.N; n++) o[n] = zc.ztil[n * zc.f];
@@ -986,6 +1074,12 @@ function zSamples() {
 function mmPerPx() { return S.wmm / S.w; }
 
 function syncRz() {
+  const sw = S.zmode === 'switch', zc = S.cam && S.cam.zc;
+  document.querySelectorAll('#zmode button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.m === S.zmode)));
+  $('zsw-row').hidden = !sw; $('zsw-note').hidden = !sw; $('st-zsw').hidden = !sw; $('sw-plot').hidden = !sw;
+  $('sigviews').classList.toggle('four', sw);
+  $('p-lift').value = S.hmm; $('o-lift').textContent = S.hmm + ' mm';
+  if (sw && zc) $('o-lead').textContent = 'lead λ = ' + fmt(zc.lead * 180 / Math.PI, 2) + '° = ' + fmt(zc.lead / TAU * S.N, 1) + ' samples';
   $('p-rbz').value = S.rzmm;
   $('o-rbz').textContent = S.rzAuto ? 'auto (' + S.rzmm + ' mm)' : S.rzmm + ' mm';
   $('b-rz-auto').setAttribute('aria-pressed', String(S.rzAuto));
@@ -996,10 +1090,10 @@ function buildCams() {
   const roller = S.follower === 'roller', mpp = mmPerPx();
   const Rb = S.rbmm / mpp, rho = S.rho / mpp;
   const zc = buildZ();
-  syncRz(zc);
   const hpx = S.hmm / mpp, part = new Float64Array(zc.NZ);
   for (let i = 0; i < zc.NZ; i++) part[i] = zc.ztil[i] * hpx;
   S.cam = { x: camProfile(S.partX, rho, roller, Rb), y: camProfile(S.partY, rho, roller, Rb), z: camProfile(part, rho, roller, S.rzmm / mpp), zc, roller, mpp };
+  syncRz();
   const cx = S.cam.x, cy = S.cam.y, cz = S.cam.z;
   const bad = [];
   if (cx.nUc) bad.push('X');
@@ -1020,7 +1114,13 @@ function buildCams() {
     zi.reduced + ' with a reduced lift (too short for two ramps at the pressure limit), ' + zi.down + ' left down (lift under ' + Math.round(TINY * 100) + '% of ' + fmt(S.hmm, 1) +
     ' mm, so the pen draws that bridge). ' + (zi.betaMax ? 'Ramps ' + deg(zi.betaMin) + ' to ' + deg(zi.betaMax) + ' wide; ' : '') + 'a ' + fmt(S.hmm, 1) +
     ' mm rise needs ' + deg(zi.betaP) + ' to stay under 30° at this radius' + (S.follower === 'roller' ? ' and to keep the roller on the profile' : '') + '.';
-  if (zc.auto && zi.bridges && S.hmm > 0) $('st-z').textContent += zc.auto.capped ?
+  if (zc.mode === 'switch') {
+    const au = zc.auto ? (zc.auto.capped ? ' Z base radius (auto) reached its ' + RZ_CAP + ' mm cap.' : ' Z base radius (auto): ' + zc.auto.R + ' mm is the smallest at which every bridge can be switched within the ' + S.pasw + '° limit.') : '';
+    $('st-zsw').textContent = 'Switch mode: ' + zi.bridges + ' bridges, ' + zi.kept + ' switched, ' + zi.skipped + ' skipped (too short for ramps within the limit: the pen draws them); ' +
+      (zi.narrowed ? zi.narrowed + ' with ramps narrower than asked; ' : '') + (zi.betaMax ? 'ramps ' + deg(zi.betaMin) + ' to ' + deg(zi.betaMax) + ' wide; ' : '') +
+      'a ' + fmt(S.hmm, 1) + ' mm switch travel needs ' + deg(zi.betaP) + (S.follower === 'roller' ? ' (pressure angle and roller)' : ' for the ' + S.pasw + '° limit') + '.' + au;
+    $('st-z').textContent = '';
+  } else if (zc.auto && zi.bridges && S.hmm > 0) $('st-z').textContent += zc.auto.capped ?
     ' Z base radius (auto) reached its ' + RZ_CAP + ' mm cap: ' + (zi.reduced + zi.down) + ' of ' + zi.bridges + ' bridges are still reduced or left down.' :
     ' Z base radius (auto): ' + zc.auto.R + ' mm is the smallest at which every bridge gets the full lift.';
   layoutCam();
@@ -1047,7 +1147,7 @@ function camExtent(k, cm, w, h) {
   const yrMax = Y.cy + RYo + b.smax * k + gap;
   const Z = { cx: cxY, cy: yrMax + gap + RZ + 12 }, gx = cxY + RZ + 2 * gap;
   return { gap, pad, RX, RY: RYo, RZ, X, Y, Z, gx, GW, GH, DL, DT, dw, dh, W: Math.max(cxY + RY, gx + GW) + pad,
-           H: Math.max(DT + dh + pad, Z.cy + Math.max(RZ, GH / 2 + 38) + pad), xLeg: cxY - RY - gap };
+           H: Math.max(DT + dh + pad, Z.cy + Math.max(RZ, GH / 2 + 52) + pad), xLeg: cxY - RY - gap };
 }
 
 function layoutCam() {
@@ -1134,21 +1234,29 @@ function drawCam() {
   g.strokeStyle = th.y;
   g.beginPath(); g.moveTo(tipY[0], tipY[1]); g.lineTo(tipY[0], yR); g.lineTo(lay.xLeg, yR); g.lineTo(lay.xLeg, pen[1]); g.lineTo(pen[0], pen[1]); g.stroke();
   // Z: cam below the Y cam, same shaft timing (flat at θ = 0 facing its follower on the right); its follower lifts the pen
-  const C = cm.z, Zp = lay.Z, zt = zAt(S.t), zdown = zt < ZEPS, dz = zt * S.hmm / mpp;
+  const C = cm.z, Zp = lay.Z, zt = zAt(S.t), zdown = penDown(S.t), dz = zt * S.hmm / mpp, sw = cm.zc.mode === 'switch';
   camBody(C, Zp.cx, Zp.cy, 0, th.z);
   const tipZ = [Zp.cx + (C.Rb + dz) * k, Zp.cy], rZ = Zp.cx + lay.RZ + lay.gap / 2;
   g.strokeStyle = th.z; g.lineWidth = 3;
   g.beginPath(); g.moveTo(tipZ[0], tipZ[1]); g.lineTo(Math.max(rZ, tipZ[0]), tipZ[1]); g.stroke();
   // side view of the pen over the paper: tip height = h z~ on a gauge that runs 0 .. h mm
-  const gx = lay.gx, GW = lay.GW, GH = lay.GH, yb = Zp.cy + GH / 2 - 8, tipY2 = yb - GH * 0.8 * zt, penX = gx + GW * 0.62;
+  const gx = lay.gx, GW = lay.GW, GH = lay.GH, yb = Zp.cy + GH / 2 - 8, tipY2 = yb - GH * 0.8 * (sw ? (zdown ? 0 : 0.6) : zt), penX = gx + GW * (sw ? 0.84 : 0.62);
   g.strokeStyle = th.muted; g.fillStyle = th.muted; g.lineWidth = 1; g.font = '11px system-ui, sans-serif';
   g.beginPath(); g.moveTo(gx + 14, yb); g.lineTo(gx + 14, yb - GH * 0.8); g.stroke();
-  for (const [f, lab] of [[0, '0'], [1, fmt(S.hmm, 1) + ' mm']]) { const y = yb - GH * 0.8 * f; g.beginPath(); g.moveTo(gx + 10, y); g.lineTo(gx + 18, y); g.stroke(); g.fillText(lab, gx + 22, y + (f ? 3 : -3)); }
+  for (const [f, lab] of [[0, '0'], [1, fmt(S.hmm, 1) + ' mm']].concat(sw ? [[0.5, 'trip']] : [])) { const y = yb - GH * 0.8 * f; g.beginPath(); g.moveTo(gx + 10, y); g.lineTo(gx + 18, y); g.stroke(); g.fillText(lab, gx + 22, y + (f === 1 ? 3 : f ? 3 : -3)); }
+  if (sw) { const y = yb - GH * 0.8 * zt; g.fillStyle = th.z; g.beginPath(); g.moveTo(gx + 14, y); g.lineTo(gx + 6, y - 4); g.lineTo(gx + 6, y + 4); g.closePath(); g.fill(); g.fillStyle = th.muted; }   // the follower on the travel scale
   g.lineWidth = 3; g.beginPath(); g.moveTo(gx, yb); g.lineTo(gx + GW, yb); g.stroke();      // the paper
   g.lineWidth = 1; g.beginPath(); for (let x = gx + 4; x < gx + GW; x += 8) { g.moveTo(x, yb + 2); g.lineTo(x - 5, yb + 8); } g.stroke();
   g.lineJoin = 'round'; g.lineWidth = 1.4; g.strokeStyle = th.ink; g.fillStyle = zdown ? th.pen : th.hollow;
   g.beginPath(); g.moveTo(penX, tipY2); g.lineTo(penX - 5, tipY2 - 13); g.lineTo(penX - 5, tipY2 - 38); g.lineTo(penX + 5, tipY2 - 38); g.lineTo(penX + 5, tipY2 - 13); g.closePath(); g.fill(); g.stroke();
-  g.fillStyle = th.muted; g.fillText('pen side view', gx, yb + 22); g.fillText((zdown ? 'down' : 'up') + ', ' + fmt(zt * S.hmm, 2) + ' mm', gx, yb + 35);
+  g.fillStyle = th.muted;
+  if (!sw) { g.fillText('pen side view', gx, yb + 22); g.fillText((zdown ? 'down' : 'up') + ', ' + fmt(zt * S.hmm, 2) + ' mm', gx, yb + 35); }
+  else {
+    const on = swOn(S.t);
+    g.fillText('servo pen ' + (zdown ? 'down' : 'up'), gx, yb + 22);
+    g.fillStyle = on ? th.z : th.hollow; g.strokeStyle = th.z; g.lineWidth = 1.4; g.beginPath(); g.arc(gx + 5, yb + 31, 4, 0, TAU); g.fill(); g.stroke();
+    g.fillStyle = th.muted; g.fillText('switch ' + (on ? 'ON' : 'off'), gx + 13, yb + 35); g.fillText('follower ' + fmt(zt * S.hmm, 2) + ' mm', gx, yb + 48);
+  }
   g.lineCap = 'butt';
   for (const [cx, cy, tip] of [[X.cx, X.cy, tipX], [Y.cx, Y.cy, tipY], [Zp.cx, Zp.cy, tipZ]]) {
     g.fillStyle = th.ink; g.beginPath(); g.arc(cx, cy, 2.5, 0, TAU); g.fill();
@@ -1401,7 +1509,15 @@ function init() {
   const numz = (id, key, unit) => $(id).addEventListener('input', () => {
     S[key] = +$(id).value; $('o' + id.slice(1)).textContent = S[key] + unit; buildCams(); resetTrail(); drawSignals(); requestDraw();
   });
-  numz('p-lift', 'hmm', ' mm'); numz('p-ramp', 'rampdeg', '°');
+  $('p-lift').addEventListener('input', () => {
+    S.hmm = +$('p-lift').value; S[S.zmode === 'switch' ? 'hSw' : 'hDirect'] = S.hmm; $('o-lift').textContent = S.hmm + ' mm';
+    buildCams(); resetTrail(); drawSignals(); requestDraw();
+  });
+  numz('p-ramp', 'rampdeg', '°'); numz('p-pa', 'pasw', '°'); numz('p-delay', 'delay', ' ms'); numz('p-lap', 'lapsec', ' s');
+  document.querySelectorAll('#zmode button').forEach(b => b.addEventListener('click', () => {
+    S.zmode = b.dataset.m; S.hmm = S.zmode === 'switch' ? S.hSw : S.hDirect;
+    buildCams(); resetTrail(); drawSignals(); requestDraw();
+  }));
   $('p-rbz').addEventListener('input', () => { S.rzAuto = false; S.rzmm = +$('p-rbz').value; buildCams(); resetTrail(); drawSignals(); requestDraw(); });
   $('b-rz-auto').addEventListener('click', () => { S.rzAuto = true; buildCams(); resetTrail(); drawSignals(); requestDraw(); });
   $('c-dbore').addEventListener('change', () => { S.dbore = $('c-dbore').checked; requestDraw(); });
@@ -1445,6 +1561,6 @@ function redrawAll() {
   drawStage(); drawCam();
 }
 
-window.epicycles = { zNeed, drawCam, zAt, penDown, ZEPS, buildZ, S, buildStl, buildCams, camAt, mmPerPx, camPen, chainTip, penAt, analyse, fft, resample, connect, partialSignal, loadFile, flush, drawStage };
+window.epicycles = { swOn, penUp, zNeed, drawCam, zAt, penDown, ZEPS, buildZ, S, buildStl, buildCams, camAt, mmPerPx, camPen, chainTip, penAt, analyse, fft, resample, connect, partialSignal, loadFile, flush, drawStage };
 init();
 })();

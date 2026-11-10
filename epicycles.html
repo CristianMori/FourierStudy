@@ -93,13 +93,15 @@
     <div class="toolbar controls">
       <label class="slider">N samples <input type="range" id="p-n" min="8" max="12" step="1" value="10"><output id="o-n"></output></label>
     </div>
-    <div class="views three">
+    <div class="views three" id="sigviews">
       <div><div class="plot-label">x(t), pixels <span class="legend"><i class="ln ln-x"></i>x <i class="ln ln-ap"></i>approximation</span></div>
         <div class="tplot"><canvas class="view sig" id="sig-x"></canvas><i class="cursor" id="cur-x"></i></div></div>
       <div><div class="plot-label">y(t), pixels <span class="legend"><i class="ln ln-y"></i>y <i class="ln ln-ap"></i>approximation</span></div>
         <div class="tplot"><canvas class="view sig" id="sig-y"></canvas><i class="cursor" id="cur-y"></i></div></div>
       <div><div class="plot-label">z(t), pen up = 1 <span class="legend"><i class="ln ln-z"></i>z <i class="ln ln-ap"></i>with cam ramps</span></div>
         <div class="tplot"><canvas class="view sig" id="sig-z"></canvas><i class="cursor" id="cur-z"></i></div></div>
+      <div id="sw-plot" hidden><div class="plot-label">z_switch(t), on = 1 <span class="legend"><i class="ln ln-z"></i>sw <i class="ln ln-ap"></i>cam</span></div>
+        <div class="tplot"><canvas class="view sig" id="sig-sw"></canvas><i class="cursor" id="cur-sw"></i></div></div>
     </div>
     <p class="note" id="st-sig"></p>
   </section>
@@ -187,16 +189,38 @@
       <label class="slider">base radius <input type="range" id="p-rb" min="5" max="100" step="1" value="25"><output id="o-rb">25 mm</output></label>
     </div>
     <div class="toolbar controls">
+      <span class="group-label">Z cam mode</span>
+      <span class="segmented" id="zmode">
+        <button data-m="direct" aria-pressed="true">lift pen directly</button>
+        <button data-m="switch" aria-pressed="false">switch for servo</button>
+      </span>
+    </div>
+    <div class="toolbar controls">
       <span class="group-label">Z cam</span>
       <label class="slider">lift <input type="range" id="p-lift" min="0.2" max="10" step="0.1" value="1"><output id="o-lift">1 mm</output></label>
       <label class="slider">ramp <input type="range" id="p-ramp" min="2" max="60" step="1" value="10"><output id="o-ramp">10°</output></label>
       <label class="slider">Z base radius <input type="range" id="p-rbz" min="8" max="100" step="1" value="20"><output id="o-rbz">auto</output></label>
       <button id="b-rz-auto" aria-pressed="true">auto</button>
     </div>
+    <div class="toolbar controls" id="zsw-row" hidden>
+      <span class="group-label">Servo</span>
+      <label class="slider">pressure limit <input type="range" id="p-pa" min="15" max="60" step="1" value="45"><output id="o-pa">45°</output></label>
+      <label class="slider">servo delay <input type="range" id="p-delay" min="0" max="500" step="10" value="120"><output id="o-delay">120 ms</output></label>
+      <label class="slider">shaft <input type="range" id="p-lap" min="5" max="300" step="5" value="60"><output id="o-lap">60 s</output><span class="hint">per lap</span></label>
+      <span class="hint" id="o-lead"></span>
+    </div>
+    <p class="note" id="zsw-note" hidden>
+      In switch mode the Z cam does not lift the pen; it trips a small switch when the follower passes half of the lift, and a servo
+      lifts the pen when the switch is on. The servo is modelled as a pure dead time after the switch changes, so the switch command is
+      advanced by the lead angle λ = 360° · delay / lap time; its half-lift crossings sit at (bridge start − λ) and (bridge end − λ),
+      so the pen leaves the paper exactly at the start of a bridge and lands exactly at the next stroke. The inked trail and the side
+      view follow the delayed servo pen, not the cam follower.
+    </p>
     <canvas id="cam"></canvas>
     <p class="note" id="st-cam"></p>
     <p class="note" id="st-size"></p>
     <p class="note" id="st-z"></p>
+    <p class="note" id="st-zsw" hidden></p>
     <div class="toolbar controls">
       <span class="group-label">STL</span>
       <label class="slider">thickness <input type="range" id="p-th" min="1" max="20" step="0.5" value="5"><output id="o-th">5 mm</output></label>

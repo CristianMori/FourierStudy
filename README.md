@@ -151,6 +151,18 @@ single line drawn by two chains of rotating circles, and then by two cams.
   curve's radius of curvature at or above the roller radius, so the Z cam is not undercut whenever that can be met. If the
   cap is reached the page says how many bridges are still reduced or left down (on the sample: 3 of 16 with a knife-edge
   follower and 11 of 16 with the 4 mm roller, whose short bridges would need a 114 or 163 mm base radius).
+- **Switch for servo (Z cam mode):** instead of lifting the pen, the Z cam only trips a switch, and a hobby servo lifts the
+  pen. Lift is then the switch travel (default 0.8 mm), the switch trips at half of it, and the pressure-angle limit is its
+  own control (default 45°, since a switch needs little force); auto base radius and the roller curvature rule use that limit.
+  The servo is modelled as a pure dead time `delay` (default 120 ms) after the switch changes state, and the shaft speed is
+  given as seconds per lap (default 60 s), so the lead angle is λ = 360° · delay / lap time (0.72° = 2.0 samples at the
+  defaults). The switch command is advanced by λ: the half-lift crossings are put at (bridge start − λ) and (bridge end − λ),
+  using the exact bridge ends, so the servo pen leaves the paper exactly at the start of a bridge and lands exactly at the
+  next stroke. Each ramp is centred on its crossing and may be as wide as the distance to the neighbouring crossings, so
+  ramps never overlap and no stroke with samples is lifted; a bridge that cannot get ramps meeting the pressure-angle (and
+  roller) rule is skipped and drawn with the pen down, and the page counts them. The inked trail, the hollow pen tip and the
+  side-view gauge follow the delayed servo pen; the gauge also shows the follower on its travel scale with the trip level, and
+  a switch lamp, and a z_switch(t) trace appears next to z(t). The servo's own travel time is not modelled.
 - **Physical size:** "drawing width" (20–200 mm, default 60) sets the mm per image pixel; "base radius" (default 25 mm)
   is R_base. The page shows the follower lift and both cam outer diameters in mm. Both cams use the same scale.
 - **Download STL:** one binary STL per cam (`cam-x.stl`, `cam-y.stl`, `cam-z.stl`, or all three), in mm, z up, a closed watertight solid:
