@@ -118,7 +118,10 @@ single line drawn by two chains of rotating circles, and then by two cams.
 - **Connect:** strokes are ordered by nearest neighbour, then improved with 2-opt and Or-opt, each entered from
   its closer end and joined into one closed path. The bridges are shown dashed and can be hidden in the final
   drawing (pen up).
-- **Signals:** the path is resampled by arc length to N = 256…4096 points (default 1024), giving x(t) and y(t).
+- **Signals:** the path is resampled by arc length to N = 256…4096 points (default 1024), giving x(t) and y(t), and a
+  third signal z(t): 0 (pen down) on stroke samples, 1 (pen up) on bridge samples. z is a control signal, not part of
+  the drawing, so it is not Fourier-filtered and has no circles or spectrum. The trail is inked only while the pen is
+  down; the pen tip is drawn hollow while it is up, and "show pen-up moves" draws the lifted moves faintly.
 - **Fourier:** a radix-2 FFT of x and of y separately; amplitude and phase stems for each. Harmonic k is a circle
   of radius 2|X_k|/N turning k times per lap.
 - **Epicycles:** the X chain above the picture sets the pen's x, the Y chain beside it sets the pen's y.
@@ -133,16 +136,27 @@ single line drawn by two chains of rotating circles, and then by two cams.
   follower (radius slider, mm) rides the inward offset of the outline. The page shows the maximum pressure angle
   (tan φ = r′/r, with the true radius) and marks undercut in red (convex pitch curve with radius of curvature below the
   roller radius).
+- **Z cam (pen lift):** a third cam on the same shaft timing (same θ, same D-bore flat at θ = 0, same direction) stores
+  z(t). Its outline is r(θ) = R_z + h·z̃(θ), with lift h (default 3 mm), base radius R_z (default 20 mm) and z̃ the
+  signal with its steps replaced by cycloidal ramps, z̃(u) = u − sin(2πu)/2π, because a cam cannot step. The ramps lie
+  inside the bridges: a rise starts on the last stroke sample before a bridge and the fall ends on the first stroke sample
+  after it, so every stroke sample is at z̃ = 0 (pen down). Ramp width is the larger of the "ramp" control (default 10°)
+  and the angle that keeps the pressure angle at or below 30° at that radius (tan φ = h(1 − cos 2πu)/(β(R_z + h z̃))). A bridge
+  too short for two such ramps gets all of its span and the largest lift that keeps the pressure angle in range; a lift
+  under 10 % of h is dropped and the pen draws that short bridge. The page reports how many bridges were lifted fully,
+  reduced or left down, and the Z cam's pressure angle and undercut, like X and Y. A side-view gauge beside the Z cam shows
+  the pen tip over the paper moving with the Z follower (a scale of 0…h mm). With the defaults most bridges are short, so
+  about half get a reduced lift and half stay down; a larger Z base radius or a smaller lift lifts more of them.
 - **Physical size:** "drawing width" (20–200 mm, default 60) sets the mm per image pixel; "base radius" (default 25 mm)
   is R_base. The page shows the follower lift and both cam outer diameters in mm. Both cams use the same scale.
-- **Download STL:** one binary STL per cam (`cam-x.stl`, `cam-y.stl`, or both), in mm, z up, a closed watertight solid:
+- **Download STL:** one binary STL per cam (`cam-x.stl`, `cam-y.stl`, `cam-z.stl`, or all three), in mm, z up, a closed watertight solid:
   the outline (the pitch curve, or the roller profile) extruded by the thickness (default 5 mm) around a centre bore
   (default 5 mm), built as an annulus at matching angle samples (N samples, so 8N triangles). Refused with a message when
   the roller profile has undercut (it self-intersects) or when the wall around the bore would be under 1.5 mm. The file
   is made in the browser with Blob and an `<a download>` link; it works from disk and from GitHub Pages.
 - **Timing:** with "D-bore" on (default) the bore has a flat at θ = 0. At the start of the lap the flat faces that cam's
-  follower (X follower on the right of its cam, Y follower below its cam), so mount both cams with the flat in the
-  same relation to its follower and they are in phase. Seen from the top face (+z) each cam turns anticlockwise.
+  follower (X and Z followers on the right of their cams, Y follower below its cam), so mount the cams with the flat in
+  the same relation to its follower and they are in phase. Seen from the top face (+z) each cam turns anticlockwise.
   With a larger lift the cams get big (outer diameter of about 2 × (R_base + lift)); real harmonic machines (Kelvin's
   tide predictor) use one simple cam or crank per harmonic instead. That one-cam-per-harmonic view is not
   implemented.

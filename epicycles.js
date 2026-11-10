@@ -17,7 +17,7 @@ const S = {
   skeleton: null, strokes: [], path: null, sig: null, ax: null, ay: null,
   N: 1024, fx: 1, fy: 1, Mx: 1, My: 1,
   t: 0, playing: true, speed: 1,
-  prev: null, cprev: null, cam: null, follower: 'knife', rho: 4, wmm: 60, rbmm: 25, thmm: 5, boremm: 5, dbore: true, camLay: null, fps: 0, frameMs: 0, drawMs: 0,
+  prev: null, cprev: null, cam: null, follower: 'knife', rho: 4, wmm: 60, rbmm: 25, hmm: 3, rampdeg: 10, rzmm: 20, thmm: 5, boremm: 5, dbore: true, camLay: null, fps: 0, frameMs: 0, drawMs: 0,
   dirty: 0, theme: null, layout: null, stats: {},
 };
 
@@ -37,7 +37,7 @@ function readTheme() {
   const cs = getComputedStyle(document.documentElement);
   const v = n => cs.getPropertyValue(n).trim();
   S.theme = { ink: v('--ink'), muted: v('--muted'), line: v('--line'), grid: v('--grid'), axis: v('--axis'),
-    x: v('--c-x'), y: v('--c-y'), pen: v('--c-pen'), bridge: v('--c-bridge'), bad: v('--c-bad'), ref: v('--c-ref'),
+    x: v('--c-x'), y: v('--c-y'), z: v('--c-z'), hollow: v('--panel'), pen: v('--c-pen'), bridge: v('--c-bridge'), bad: v('--c-bad'), ref: v('--c-ref'),
     dark: matchMedia('(prefers-color-scheme: dark)').matches };
 }
 
@@ -463,6 +463,7 @@ function runSignals() {
   if (!path || path.P < 2) { S.sig = null; S.ax = S.ay = null; return; }
   S.sig = resample(path, S.N);
   if (!(S.sig.L > 1e-6)) { S.sig = null; S.ax = S.ay = null; return; }
+  S.sig.z = Float64Array.from(S.sig.b);           // pen up (1) on the bridge samples, down (0) on the stroke samples
   const t0 = performance.now();
   S.ax = analyse(S.sig.x);
   S.ay = analyse(S.sig.y);
@@ -598,7 +599,7 @@ function niceTicks(lo, hi, n) {
   return out;
 }
 
-function timePlot(id, sig, part, colour) {
+function timePlot(id, sig, part, colour, lab) {
   const th = S.theme, { g, w, h } = prep($(id));
   const L = 40, R = 6, T = 8, B = 18;
   let lo = Infinity, hi = -Infinity;
@@ -606,7 +607,7 @@ function timePlot(id, sig, part, colour) {
   const pad = (hi - lo) * 0.06 || 1; lo -= pad; hi += pad;
   const px = t => L + t * (w - L - R), py = v => T + (hi - v) / (hi - lo) * (h - T - B);
   g.font = '11px system-ui, sans-serif'; g.fillStyle = th.muted; g.strokeStyle = th.grid; g.lineWidth = 1;
-  for (const v of niceTicks(lo, hi, 3)) { g.beginPath(); g.moveTo(L, py(v)); g.lineTo(w - R, py(v)); g.stroke(); g.fillText(String(Math.round(v)), 4, py(v) + 4); }
+  for (const v of niceTicks(lo, hi, 3)) { g.beginPath(); g.moveTo(L, py(v)); g.lineTo(w - R, py(v)); g.stroke(); g.fillText(lab ? lab(v) : String(Math.round(v)), 4, py(v) + 4); }
   [[0, '0'], [0.5, 'T/2'], [1, 'T']].forEach(([t, s]) => { g.textAlign = t === 1 ? 'right' : t === 0 ? 'left' : 'center'; g.fillText(s, px(t), h - 4); });
   g.textAlign = 'left';
   const draw = (arr, st, wd, dash) => {
@@ -619,9 +620,10 @@ function timePlot(id, sig, part, colour) {
 }
 
 function drawSignals() {
-  if (!S.sig) { for (const id of ['sig-x', 'sig-y']) { const { g, w, h } = prep($(id)); emptyMsg(g, w, h, 'no signal'); } return; }
+  if (!S.sig) { for (const id of ['sig-x', 'sig-y', 'sig-z']) { const { g, w, h } = prep($(id)); emptyMsg(g, w, h, 'no signal'); } return; }
   timePlot('sig-x', S.sig.x, S.partX, S.theme.x);
   timePlot('sig-y', S.sig.y, S.partY, S.theme.y);
+  timePlot('sig-z', S.sig.z, S.cam ? zSamples() : null, S.theme.z, v => (+v.toFixed(2)).toString());
   $('o-n').textContent = S.N;
   $('st-sig').textContent = S.N + ' samples, closed path length ' + fmt(S.sig.L, 0) + ' px, one sample every ' + fmt(S.sig.L / S.N, 2) + ' px of path.';
 }
@@ -721,18 +723,20 @@ function resetTrail() {
 // pen position in the picture, from the two independent chains
 function penAt(t, Mx, My) { return [chainTip(S.ax, t, Mx), chainTip(S.ay, t, My === undefined ? Mx : My)]; }
 
+// the trail is inked only while the pen is down (Z cam below ε); pen-up moves show faintly when asked for
+function trailSeg(g, prev, sx, sy, t) {
+  const down = penDown(t);
+  if (!down && !$('c-penup').checked) return;
+  g.beginPath(); g.moveTo(prev[0], prev[1]); g.lineTo(sx, sy);
+  g.strokeStyle = S.theme.pen; g.globalAlpha = down ? 1 : 0.45; g.lineWidth = down ? 2 : 1; g.lineCap = 'round'; g.stroke();
+  g.globalAlpha = 1;
+}
+
 function stepTrail(lay, pen, t, cam) {
   const g = (cam ? S.ctrail : S.trail).getContext('2d'), prev = cam ? S.cprev : S.prev;
   g.setTransform(lay.dpr, 0, 0, lay.dpr, 0, 0);
   const sx = lay.M0 + pen[0] * lay.s, sy = lay.M0 + pen[1] * lay.s;
-  if (prev) {
-    const bridge = S.sig.b[Math.floor(t * S.N + 0.5) % S.N] === 1;
-    if (!(bridge && $('c-penup').checked)) {
-      g.beginPath(); g.moveTo(prev[0], prev[1]); g.lineTo(sx, sy);
-      g.strokeStyle = S.theme.pen; g.globalAlpha = bridge ? 0.45 : 1; g.lineWidth = bridge ? 1 : 2; g.lineCap = 'round'; g.stroke();
-      g.globalAlpha = 1;
-    }
-  }
+  if (prev) trailSeg(g, prev, sx, sy, t);
   if (cam) S.cprev = [sx, sy]; else S.prev = [sx, sy];
 }
 
@@ -800,7 +804,7 @@ function drawStage() {
   g.restore();
   g.fillStyle = th.x; g.beginPath(); g.arc(tx[0], tx[1], 3, 0, TAU); g.fill();
   g.fillStyle = th.y; g.beginPath(); g.arc(ty[0], ty[1], 3, 0, TAU); g.fill();
-  g.fillStyle = th.pen; g.strokeStyle = th.ink; g.lineWidth = 1.2;
+  g.fillStyle = penDown(S.t) ? th.pen : th.hollow; g.strokeStyle = th.ink; g.lineWidth = 1.2;
   g.beginPath(); g.arc(pen[0], pen[1], 4.5, 0, TAU); g.fill(); g.stroke();
   g.fillStyle = th.muted; g.font = '11px system-ui, sans-serif';
   g.fillText('X chain → pen x', M0 + 6, 14); g.fillText('Y chain', 6, M0 + 14); g.fillText('→ pen y', 6, M0 + 27);
@@ -808,6 +812,7 @@ function drawStage() {
   const cx = (S.t * 100) + '%';
   $('cur-x').style.left = 'calc(40px + (100% - 46px) * ' + S.t + ')';
   $('cur-y').style.left = 'calc(40px + (100% - 46px) * ' + S.t + ')';
+  $('cur-z').style.left = 'calc(40px + (100% - 46px) * ' + S.t + ')';
 }
 
 // ---------- 7. cams ----------
@@ -849,6 +854,73 @@ function camProfile(part, rho, roller, Rb) {
   return { N, min: mn, rmax, s: sd, r, Rb, smax, outline, pitch, bad, px, py, uc, nUc, maxPress: maxPress * 180 / Math.PI };
 }
 
+// ----- pen lift: the Z cam -----
+// z(t) is 0 (pen down) on stroke samples and 1 (up) on bridge samples. It is a control signal, so it is not Fourier-filtered:
+// the cam stores it directly, with its steps replaced by cycloidal ramps  z~(u) = u - sin(2πu)/2π  (zero slope at both ends).
+// Each bridge is a run of samples between two stroke samples; its ramps may use all of that span, the rise starting on the last
+// stroke sample before it and the fall ending on the first one after, so every stroke sample stays at z~ = 0 (pen down).
+// The cycloid's slope is (1 - cos 2πu)/β, so with r = Rz + h z~ the pressure angle is  tan φ = h (1 - cos 2πu) / (β (Rz + h z~)).
+// Ramp width β is the larger of the ramp control and the width that keeps φ at or below PA_DESIGN. A bridge too short for two
+// such ramps gets all of its span (β = span/2) and the largest lift that keeps φ in range; a lift below TINY·h is dropped and
+// that bridge is drawn with the pen down. z~ is sampled at ZRES points per lap whatever N is, so the ramps are smooth.
+const PA_DESIGN = 29.7;      // degrees; a little under the 30° limit so the measured value (finite differences) stays below it
+const ZEPS = 0.02;           // the pen touches the paper while z~ is below this
+const TINY = 0.1;
+const ZRES = 4096;
+const cyc = u => u - Math.sin(TAU * u) / TAU;
+
+function buildZ() {
+  const b = S.sig.b, N = S.N, NZ = Math.max(N, ZRES), f = NZ / N;
+  const h = S.hmm, R = S.rzmm, tanP = Math.tan(PA_DESIGN * Math.PI / 180), ramp = S.rampdeg * Math.PI / 180;
+  const G = 128, cz = new Float64Array(G + 1), cc = new Float64Array(G + 1);
+  for (let i = 0; i <= G; i++) { cz[i] = cyc(i / G); cc[i] = 1 - Math.cos(TAU * i / G); }
+  // smallest ramp width (rad) that keeps the pressure angle within PA_DESIGN for lift L
+  const need = L => { let m = 0; for (let i = 0; i <= G; i++) m = Math.max(m, cc[i] / (R + L * cz[i])); return L * m / tanP; };
+  const ztil = new Float64Array(NZ);
+  const info = { N, NZ, bridges: 0, full: 0, reduced: 0, down: 0, narrowed: 0, betaMin: Infinity, betaMax: 0, betaP: h > 0 ? need(h) : 0, up: 0 };
+  const s0 = b.indexOf(0);
+  if (h > 0 && s0 >= 0) {
+    let a = -1;
+    for (let k = 0; k <= N; k++) {
+      const bi = k < N ? b[(s0 + k) % N] : 0;
+      if (bi && a < 0) a = k;
+      else if (!bi && a >= 0) {
+        const m = k - a, A = (m + 1) * TAU / N, start = ((s0 + a - 1) % N) * f;
+        a = -1; info.bridges++; info.up += m;
+        const bm = A / 2, want = Math.max(ramp, info.betaP);
+        let lift = h, beta = Math.min(want, bm);
+        if (info.betaP > bm) {
+          let lo = 0, hi = h;
+          for (let it = 0; it < 18; it++) { const mid = (lo + hi) / 2; if (need(mid) <= bm) lo = mid; else hi = mid; }
+          lift = lo; beta = bm;
+        } else if (want > bm) info.narrowed++;
+        if (lift < TINY * h) { info.down++; continue; }
+        if (lift < h) info.reduced++; else info.full++;
+        info.betaMin = Math.min(info.betaMin, beta); info.betaMax = Math.max(info.betaMax, beta);
+        for (let j = 0; j <= (m + 1) * f; j++) {
+          const sa = j * TAU / NZ;
+          ztil[(start + j) % NZ] = (sa < beta ? cyc(sa / beta) : sa > A - beta ? cyc((A - sa) / beta) : 1) * lift / h;
+        }
+      }
+    }
+  }
+  return { NZ, f, N, ztil, h, R, info };
+}
+
+// pen elevation as a fraction of the lift, z~, at lap fraction t (linear between the ZRES profile samples)
+function zAt(t) {
+  const zc = S.cam && S.cam.zc;
+  if (!zc) return 0;
+  const u = (t - Math.floor(t)) * zc.NZ, i = Math.floor(u), q = u - i;
+  return (1 - q) * zc.ztil[i % zc.NZ] + q * zc.ztil[(i + 1) % zc.NZ];
+}
+function penDown(t) { return zAt(t) < ZEPS; }
+function zSamples() {
+  const zc = S.cam.zc, o = new Float64Array(zc.N);
+  for (let n = 0; n < zc.N; n++) o[n] = zc.ztil[n * zc.f];
+  return o;
+}
+
 // Physical size: the picture is S.wmm millimetres wide, so one image pixel is mmPerPx() millimetres. Cam radii, the roller
 // radius and the lifts are all kept in image pixels; the mm values only matter for the sizes shown and for the STL files.
 function mmPerPx() { return S.wmm / S.w; }
@@ -857,19 +929,29 @@ function buildCams() {
   if (!S.partX || !S.w) { S.cam = null; return; }
   const roller = S.follower === 'roller', mpp = mmPerPx();
   const Rb = S.rbmm / mpp, rho = S.rho / mpp;
-  S.cam = { x: camProfile(S.partX, rho, roller, Rb), y: camProfile(S.partY, rho, roller, Rb), roller, mpp };
-  const cx = S.cam.x, cy = S.cam.y;
+  const zc = buildZ(), hpx = S.hmm / mpp, part = new Float64Array(zc.NZ);
+  for (let i = 0; i < zc.NZ; i++) part[i] = zc.ztil[i] * hpx;
+  S.cam = { x: camProfile(S.partX, rho, roller, Rb), y: camProfile(S.partY, rho, roller, Rb), z: camProfile(part, rho, roller, S.rzmm / mpp), zc, roller, mpp };
+  const cx = S.cam.x, cy = S.cam.y, cz = S.cam.z;
   const bad = [];
   if (cx.nUc) bad.push('X');
   if (cy.nUc) bad.push('Y');
+  if (cz.nUc) bad.push('Z');
   const press = (n, c) => n + ' cam: max pressure angle ' + fmt(c.maxPress, 0) + '°';
-  $('st-cam').innerHTML = press('X', cx) + ', ' + press('Y', cy) + (cx.maxPress > 30 || cy.maxPress > 30 ? ' (above about 30° a real follower jams)' : '') + '. ' +
-    (roller ? (bad.length ? '<span class="bad">Undercut on the ' + bad.join(' and ') + ' cam (red): it cannot be made with a roller of radius ' + S.rho + ' mm.</span>'
+  $('st-cam').innerHTML = press('X', cx) + ', ' + press('Y', cy) + ', ' + press('Z', cz) + (Math.max(cx.maxPress, cy.maxPress, cz.maxPress) > 30 ? ' (above about 30° a real follower jams)' : '') + '. ' +
+    (roller ? (bad.length ? '<span class="bad">Undercut on the ' + bad.join(', ') + ' cam (red): it cannot be made with a roller of radius ' + S.rho + ' mm.</span>'
                           : 'No undercut with a roller of radius ' + S.rho + ' mm.')
             : 'Knife-edge follower: exact for any profile.');
   const dia = c => fmt(2 * c.rmax * mpp, 1);
   $('st-size').textContent = 'Drawing ' + fmt(S.wmm, 0) + ' × ' + fmt(S.h * mpp, 1) + ' mm; follower lift (= pen travel) X ' + fmt(cx.smax * mpp, 1) +
-    ' mm, Y ' + fmt(cy.smax * mpp, 1) + ' mm. Cam outer diameter: X ' + dia(cx) + ' mm, Y ' + dia(cy) + ' mm (base radius ' + fmt(S.rbmm, 0) + ' mm).';
+    ' mm, Y ' + fmt(cy.smax * mpp, 1) + ' mm, pen lift Z ' + fmt(cz.smax * mpp, 1) + ' mm. Cam outer diameter: X ' + dia(cx) + ' mm, Y ' + dia(cy) + ' mm (base radius ' +
+    fmt(S.rbmm, 0) + ' mm), Z ' + dia(cz) + ' mm (base radius ' + fmt(S.rzmm, 0) + ' mm).';
+  const zi = zc.info, deg = r => fmt(r * 180 / Math.PI, 1) + '°';
+  $('st-z').textContent = !zi.bridges ? 'No bridges, so the pen never lifts.' : S.hmm <= 0 ? 'Lift is 0: the pen stays down.' :
+    'Pen lift: ' + zi.bridges + ' bridges. ' + zi.full + ' lifted the full ' + fmt(S.hmm, 1) + ' mm' + (zi.narrowed ? ' (' + zi.narrowed + ' of them with ramps narrower than asked)' : '') + ', ' +
+    zi.reduced + ' with a reduced lift (too short for two ramps at the pressure limit), ' + zi.down + ' left down (lift under ' + Math.round(TINY * 100) + '% of ' + fmt(S.hmm, 1) +
+    ' mm, so the pen draws that bridge). ' + (zi.betaMax ? 'Ramps ' + deg(zi.betaMin) + ' to ' + deg(zi.betaMax) + ' wide; ' : '') + 'a ' + fmt(S.hmm, 1) +
+    ' mm rise needs ' + deg(zi.betaP) + ' to stay under 30° at this radius.';
   layoutCam();
 }
 
@@ -884,15 +966,17 @@ function camPen(t) { return [camAt(S.cam.x, t), camAt(S.cam.y, t)]; }
 // X cam top-left, drawing below it, Y cam to the right of both. The follower rod of each cam is a rigid frame (rod, leg, bar)
 // that only translates, so bar travel = follower travel exactly.
 function camExtent(k, cm, w, h) {
-  const gap = 12, pad = 10, a = cm.x, b = cm.y;
-  const RX = (a.Rb + a.smax) * k, RY = (b.Rb + b.smax) * k;
+  const gap = 12, pad = 10, a = cm.x, b = cm.y, z = cm.z, GW = 104, GH = 84;
+  const RX = (a.Rb + a.smax) * k, RYo = (b.Rb + b.smax) * k, RZ = (z.Rb + z.smax) * k, RY = Math.max(RYo, RZ);
   const X = { cx: pad + RX, cy: pad + RX };
   const xrMax = X.cx + RX + a.smax * k + gap;
   const DL = pad, DT = X.cy + RX + 2 * gap, dw = w * k, dh = h * k;
   const cxY = Math.max(xrMax, DL + dw) + 2 * gap + RY;
-  const Y = { cx: cxY, cy: pad + RY };
-  const yrMax = Y.cy + RY + b.smax * k + gap;
-  return { gap, pad, RX, RY, X, Y, DL, DT, dw, dh, W: cxY + RY + pad, H: Math.max(DT + dh + pad, yrMax + pad), xLeg: cxY - RY - gap };
+  const Y = { cx: cxY, cy: pad + RYo };
+  const yrMax = Y.cy + RYo + b.smax * k + gap;
+  const Z = { cx: cxY, cy: yrMax + gap + RZ + 12 }, gx = cxY + RZ + 2 * gap;
+  return { gap, pad, RX, RY: RYo, RZ, X, Y, Z, gx, GW, GH, DL, DT, dw, dh, W: Math.max(cxY + RY, gx + GW) + pad,
+           H: Math.max(DT + dh + pad, Z.cy + Math.max(RZ, GH / 2 + 38) + pad), xLeg: cxY - RY - gap };
 }
 
 function layoutCam() {
@@ -925,14 +1009,7 @@ function stepCamTrail(pen, t) {
   const g = S.ctrail.getContext('2d');
   g.setTransform(lay.dpr, 0, 0, lay.dpr, 0, 0);
   const sx = lay.ox + lay.DL + pen[0] * lay.k, sy = lay.DT + pen[1] * lay.k, prev = S.cprev;
-  if (prev) {
-    const bridge = S.sig.b[Math.floor(t * S.N + 0.5) % S.N] === 1;
-    if (!(bridge && $('c-penup').checked)) {
-      g.beginPath(); g.moveTo(prev[0], prev[1]); g.lineTo(sx, sy);
-      g.strokeStyle = S.theme.pen; g.globalAlpha = bridge ? 0.45 : 1; g.lineWidth = bridge ? 1 : 2; g.lineCap = 'round'; g.stroke();
-      g.globalAlpha = 1;
-    }
-  }
+  if (prev) trailSeg(g, prev, sx, sy, t);
   S.cprev = [sx, sy];
 }
 
@@ -985,22 +1062,38 @@ function drawCam() {
   const tipY = [Y.cx, Y.cy + (B.Rb + sy) * k], gY = B.smax * k + lay.gap, yR = tipY[1] + gY;
   g.strokeStyle = th.y;
   g.beginPath(); g.moveTo(tipY[0], tipY[1]); g.lineTo(tipY[0], yR); g.lineTo(lay.xLeg, yR); g.lineTo(lay.xLeg, pen[1]); g.lineTo(pen[0], pen[1]); g.stroke();
+  // Z: cam below the Y cam, same shaft timing (flat at θ = 0 facing its follower on the right); its follower lifts the pen
+  const C = cm.z, Zp = lay.Z, zt = zAt(S.t), zdown = zt < ZEPS, dz = zt * S.hmm / mpp;
+  camBody(C, Zp.cx, Zp.cy, 0, th.z);
+  const tipZ = [Zp.cx + (C.Rb + dz) * k, Zp.cy], rZ = Zp.cx + lay.RZ + lay.gap / 2;
+  g.strokeStyle = th.z; g.lineWidth = 3;
+  g.beginPath(); g.moveTo(tipZ[0], tipZ[1]); g.lineTo(Math.max(rZ, tipZ[0]), tipZ[1]); g.stroke();
+  // side view of the pen over the paper: tip height = h z~ on a gauge that runs 0 .. h mm
+  const gx = lay.gx, GW = lay.GW, GH = lay.GH, yb = Zp.cy + GH / 2 - 8, tipY2 = yb - GH * 0.8 * zt, penX = gx + GW * 0.62;
+  g.strokeStyle = th.muted; g.fillStyle = th.muted; g.lineWidth = 1; g.font = '11px system-ui, sans-serif';
+  g.beginPath(); g.moveTo(gx + 14, yb); g.lineTo(gx + 14, yb - GH * 0.8); g.stroke();
+  for (const [f, lab] of [[0, '0'], [1, fmt(S.hmm, 1) + ' mm']]) { const y = yb - GH * 0.8 * f; g.beginPath(); g.moveTo(gx + 10, y); g.lineTo(gx + 18, y); g.stroke(); g.fillText(lab, gx + 22, y + (f ? 3 : -3)); }
+  g.lineWidth = 3; g.beginPath(); g.moveTo(gx, yb); g.lineTo(gx + GW, yb); g.stroke();      // the paper
+  g.lineWidth = 1; g.beginPath(); for (let x = gx + 4; x < gx + GW; x += 8) { g.moveTo(x, yb + 2); g.lineTo(x - 5, yb + 8); } g.stroke();
+  g.lineJoin = 'round'; g.lineWidth = 1.4; g.strokeStyle = th.ink; g.fillStyle = zdown ? th.pen : th.hollow;
+  g.beginPath(); g.moveTo(penX, tipY2); g.lineTo(penX - 5, tipY2 - 13); g.lineTo(penX - 5, tipY2 - 38); g.lineTo(penX + 5, tipY2 - 38); g.lineTo(penX + 5, tipY2 - 13); g.closePath(); g.fill(); g.stroke();
+  g.fillStyle = th.muted; g.fillText('pen side view', gx, yb + 22); g.fillText((zdown ? 'down' : 'up') + ', ' + fmt(zt * S.hmm, 2) + ' mm', gx, yb + 35);
   g.lineCap = 'butt';
-  for (const [cx, cy, tip] of [[X.cx, X.cy, tipX], [Y.cx, Y.cy, tipY]]) {
+  for (const [cx, cy, tip] of [[X.cx, X.cy, tipX], [Y.cx, Y.cy, tipY], [Zp.cx, Zp.cy, tipZ]]) {
     g.fillStyle = th.ink; g.beginPath(); g.arc(cx, cy, 2.5, 0, TAU); g.fill();
     if (cm.roller) { g.lineWidth = 1.6; g.strokeStyle = th.ink; g.beginPath(); g.arc(tip[0], tip[1], S.rho / mpp * k, 0, TAU); g.fillStyle = th.panel; g.fill(); g.stroke(); }
     else { g.fillStyle = th.ink; g.beginPath(); g.arc(tip[0], tip[1], 3, 0, TAU); g.fill(); }
   }
-  g.fillStyle = th.pen; g.strokeStyle = th.ink; g.lineWidth = 1.2;
+  g.fillStyle = zdown ? th.pen : th.hollow; g.strokeStyle = th.ink; g.lineWidth = 1.2;
   g.beginPath(); g.arc(pen[0], pen[1], 4.5, 0, TAU); g.fill(); g.stroke();
   // scale bar
   const bar = Math.max(1, Math.round(10 / mpp * k));
   g.strokeStyle = th.muted; g.fillStyle = th.muted; g.lineWidth = 2;
   g.beginPath(); g.moveTo(lay.DL, lay.H - 8); g.lineTo(lay.DL + bar, lay.H - 8); g.stroke();
   g.font = '11px system-ui, sans-serif'; g.fillText('10 mm', lay.DL + bar + 6, lay.H - 4);
-  g.fillText('X cam', X.cx - 14, 12); g.fillText('Y cam', Y.cx - 14, 12);
+  g.fillText('X cam', X.cx - 14, 12); g.fillText('Y cam', Y.cx - 14, 12); g.fillText('Z cam (pen lift)', Zp.cx - 34, Zp.cy - lay.RZ - 4);
   g.restore();
-  S.camGeom = { tipX: tipX[0], barX: pen[0], tipY: tipY[1], barY: pen[1], rodX: rX, legY: yR, k };
+  S.camGeom = { tipX: tipX[0], barX: pen[0], tipY: tipY[1], barY: pen[1], rodX: rX, legY: yR, k, tipZ: tipZ[0], zCx: Zp.cx, zRb: C.Rb, penTipY: tipY2, paperY: yb, gaugeH: GH * 0.8, down: zdown };
 }
 
 // ---------- STL export ----------
@@ -1234,10 +1327,15 @@ function init() {
   });
   num('p-rho', 'rho', true); num('p-wmm', 'wmm', true); num('p-rb', 'rbmm', true);
   num('p-th', 'thmm'); num('p-bore', 'boremm');
+  const numz = (id, key, unit) => $(id).addEventListener('input', () => {
+    S[key] = +$(id).value; $('o' + id.slice(1)).textContent = S[key] + unit; buildCams(); resetTrail(); drawSignals(); requestDraw();
+  });
+  numz('p-lift', 'hmm', ' mm'); numz('p-ramp', 'rampdeg', '°'); numz('p-rbz', 'rzmm', ' mm');
   $('c-dbore').addEventListener('change', () => { S.dbore = $('c-dbore').checked; requestDraw(); });
   $('b-stl-x').addEventListener('click', () => exportStl(['x']));
   $('b-stl-y').addEventListener('click', () => exportStl(['y']));
-  $('b-stl-both').addEventListener('click', () => exportStl(['x', 'y']));
+  $('b-stl-z').addEventListener('click', () => exportStl(['z']));
+  $('b-stl-all').addEventListener('click', () => exportStl(['x', 'y', 'z']));
   // X and Y circle counts are independent; "link" makes a change to one move the other
   const setFrac = (axis, f) => {
     f = Math.max(0, Math.min(1, f));
@@ -1274,6 +1372,6 @@ function redrawAll() {
   drawStage(); drawCam();
 }
 
-window.epicycles = { S, buildStl, buildCams, camAt, mmPerPx, camPen, chainTip, penAt, analyse, fft, resample, connect, partialSignal, loadFile, flush, drawStage };
+window.epicycles = { drawCam, zAt, penDown, ZEPS, buildZ, S, buildStl, buildCams, camAt, mmPerPx, camPen, chainTip, penAt, analyse, fft, resample, connect, partialSignal, loadFile, flush, drawStage };
 init();
 })();

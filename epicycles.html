@@ -82,20 +82,24 @@
   </section>
 
   <section class="panel" id="panel-sig">
-    <h2><span class="swatch sw-3"></span><span>4 · Two signals, x(t) and y(t)</span></h2>
+    <h2><span class="swatch sw-3"></span><span>4 · Three signals, x(t), y(t) and z(t)</span></h2>
     <p class="step">
       The closed path is resampled at equal steps of arc length into N points, so t runs over one lap, the period T.
       Reading off the x and y coordinates gives two ordinary signals. The faint dashed curve is what is left of each
-      signal when only the circles chosen in step 6 are kept.
+      signal when only the circles chosen in step 6 are kept. The third signal, z(t), says whether the pen is down (0, on
+      every stroke sample) or up (1, on every bridge sample). It is a control signal, not part of the drawing, so it is not
+      Fourier-filtered and has no circles; its dashed curve is the same signal with the smooth ramps a cam can follow (step 7).
     </p>
     <div class="toolbar controls">
       <label class="slider">N samples <input type="range" id="p-n" min="8" max="12" step="1" value="10"><output id="o-n"></output></label>
     </div>
-    <div class="views two">
+    <div class="views three">
       <div><div class="plot-label">x(t), pixels <span class="legend"><i class="ln ln-x"></i>x <i class="ln ln-ap"></i>approximation</span></div>
         <div class="tplot"><canvas class="view sig" id="sig-x"></canvas><i class="cursor" id="cur-x"></i></div></div>
       <div><div class="plot-label">y(t), pixels <span class="legend"><i class="ln ln-y"></i>y <i class="ln ln-ap"></i>approximation</span></div>
         <div class="tplot"><canvas class="view sig" id="sig-y"></canvas><i class="cursor" id="cur-y"></i></div></div>
+      <div><div class="plot-label">z(t), pen up = 1 <span class="legend"><i class="ln ln-z"></i>z <i class="ln ln-ap"></i>with cam ramps</span></div>
+        <div class="tplot"><canvas class="view sig" id="sig-z"></canvas><i class="cursor" id="cur-z"></i></div></div>
     </div>
     <p class="note" id="st-sig"></p>
   </section>
@@ -142,7 +146,7 @@
     <div class="toolbar controls">
       <label class="check"><input type="checkbox" id="c-circles" checked> show circles</label>
       <label class="check"><input type="checkbox" id="c-ghost" checked> show target path</label>
-      <label class="check"><input type="checkbox" id="c-penup"> hide bridges (pen up)</label>
+      <label class="check"><input type="checkbox" id="c-penup"> show pen-up moves (faint)</label>
     </div>
     <div class="stage-wrap"><canvas id="stage"></canvas></div>
     <p class="note" id="st-stage"></p>
@@ -163,6 +167,9 @@
       the follower moves exactly as far as the pen (1:1) and the whole section, cams included, is drawn at one scale. That makes the
       drawing smaller than in step 6, but this is the real mechanism. The circle chains and the cams make the same motion and the
       same drawing, from the same circle counts. Seen from the top, each cam turns anticlockwise (as drawn), once per lap.
+      A third, <b>Z cam</b> sits on the same shaft timing and stores the pen-up/pen-down signal: its follower sets the pen's
+      elevation, drawn as a side view on the right. A cam cannot step, so its rises and falls are smooth ramps placed inside
+      the bridges, and no stroke is lost; a bridge too short for a ramp that gentle gets a smaller lift, or none.
     </p>
     <div class="toolbar controls">
       <button id="b-play2" aria-pressed="true">Pause</button>
@@ -179,9 +186,16 @@
       <label class="slider">drawing width <input type="range" id="p-wmm" min="20" max="200" step="1" value="60"><output id="o-wmm">60 mm</output></label>
       <label class="slider">base radius <input type="range" id="p-rb" min="5" max="100" step="1" value="25"><output id="o-rb">25 mm</output></label>
     </div>
+    <div class="toolbar controls">
+      <span class="group-label">Z cam</span>
+      <label class="slider">lift <input type="range" id="p-lift" min="0.5" max="10" step="0.5" value="3"><output id="o-lift">3 mm</output></label>
+      <label class="slider">ramp <input type="range" id="p-ramp" min="2" max="60" step="1" value="10"><output id="o-ramp">10°</output></label>
+      <label class="slider">Z base radius <input type="range" id="p-rbz" min="8" max="100" step="1" value="20"><output id="o-rbz">20 mm</output></label>
+    </div>
     <canvas id="cam"></canvas>
     <p class="note" id="st-cam"></p>
     <p class="note" id="st-size"></p>
+    <p class="note" id="st-z"></p>
     <div class="toolbar controls">
       <span class="group-label">STL</span>
       <label class="slider">thickness <input type="range" id="p-th" min="1" max="20" step="0.5" value="5"><output id="o-th">5 mm</output></label>
@@ -189,14 +203,15 @@
       <label class="check"><input type="checkbox" id="c-dbore" checked> D-bore</label>
       <button id="b-stl-x">Download STL, X cam</button>
       <button id="b-stl-y">Download STL, Y cam</button>
-      <button id="b-stl-both">Download both</button>
+      <button id="b-stl-z">Download STL, Z cam</button>
+      <button id="b-stl-all">Download all</button>
     </div>
     <p class="note" id="st-stl"></p>
     <p class="note">
       The STL is a binary, watertight solid in millimetres: the cam outline (the pitch curve, or the roller profile when Roller is
       selected) extruded by the thickness, with a centre bore. <b>Timing:</b> with D-bore on, the bore has a flat at θ = 0; at the
-      start of the lap, the flat faces that cam's follower (the X follower on the right, the Y follower below), so mount both
-      cams on their shafts with the flat in the same relation to the follower and they are in phase. Each cam must turn
+      start of the lap, the flat faces that cam's follower (the X and Z followers on the right, the Y follower below), so mount
+      the cams on their shafts with the flat in the same relation to the follower and they are in phase. Each cam must turn
       anticlockwise seen from its top face (the face you see when the STL opens in a slicer with z up). The export is refused when
       the roller profile has undercut or when the wall around the bore is under 1.5 mm.
     </p>
